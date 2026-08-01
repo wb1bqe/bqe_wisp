@@ -1,0 +1,54 @@
+program_settings:
+
+  - common:
+      python_path: python   # Can be a full path
+
+  - bqe_wisp:
+      horizon_threshold_elevation: 0.1 # degrees
+      ui_refresh_interval: 5 seconds
+      ui_port: 8028
+      sleep_interval: 30 # Seconds
+      sleep_interval_high_elevation: 10 # Seconds
+
+  - bqe_wisp_web:
+      placeholder_key: ''
+
+  - bqe_track_continuously:
+      high_pass_elevation: '65'
+      horizon_threshold_elevation: '.1'
+      sleep_interval: '30'
+      sleep_interval_high_elevation: '10'
+      tle_file: 'keps.txt'
+      satellite_config_file: 'bqe_config/satellites.yaml'  # TODO - this not needed?
+      antenna_request_timeout: '5'  # Seconds
+      tle_file: 'keps.txt'
+      satellite_config: 'bqe_config/satellites.yaml'  #TODO This should become satellite_config_file here & in code.
+      qth_config: 'bqe_config/my_qth.yaml'  # TODO - move this to common section
+      radio_config: 'bqe_config/my_rig.yaml'
+    #status_file: None,
+      default_rigctld_pid_file: 'logs/rigctld.pid'
+      default_pass_program_pid_file: 'logs/pass_program.pid'
+      sleep_interval_seconds: '30'
+      sleep_interval_high_elevation_seconds: 10
+      default_enable_antenna_tracking: None
+      default_enable_tuning: None
+      initial_antenna: '1'
+      default_antenna: '1' # When there is no rule selection
+      antenna_switch_url: None
+      antenna_request_timeout_seconds: None,
+      antenna_selection_rules: '[]'
+      default_antenna_description: None
+      process_stop_timeout_seconds: '5.0'
+
+
+  - third_party:
+      # Hamlib stuff
+      rigctld_port: '4532'
+      rigctl_path: "rigctl"
+      rigctld_path: "rigctld"
+      rigctld_startup_delay_seconds: 2
+      rigctld_startup_output_timeout_seconds: 2
+
+  # Al's private stuff
+  - wb1bqe:
+      rcs10_address: 192.168.1.110:8000   # Al's VHF antenna switch

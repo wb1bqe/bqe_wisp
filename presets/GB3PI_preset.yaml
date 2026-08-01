@@ -1,0 +1,9 @@
+nickname: "GB3PI"
+channel_name: "2m GB3PI repeater"
+frequency_hz: "145750000"
+mode: "FMN"
+bandwidth: "8000"
+repeater_offset_khz: "600"
+repeater_shift: "-"
+ctcss_tone: "77.0"
+power: 30

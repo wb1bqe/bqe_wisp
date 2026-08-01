@@ -1,0 +1,9 @@
+nickname: "2m_derry_repeater"
+channel_name: "2m Derry Repeater"
+frequency_hz: "146850000"
+mode: "FM"
+bandwidth: "16000"  # Overridden in all cases in the code right now.
+repeater_offset_khz: "600"
+repeater_shift: "-"
+ctcss_tone: "85.4"
+power: 50  # watts

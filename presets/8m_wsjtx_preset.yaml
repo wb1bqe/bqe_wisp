@@ -1,0 +1,7 @@
+nickname: "8m_wsjtx"
+channel_name: "8m WSJTX"  # monitor either wspr or ft8
+type: "Digital"
+frequency_hz: "40680000"
+mode: "USB"
+bandwidth: "3000"
+program_to_run_while_waiting: "wsjtx" # Note: Wsjtx needs to be cleanly shut down in desired mode first.

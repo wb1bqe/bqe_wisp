@@ -1,0 +1,11 @@
+nickname: "concord_c4fm"
+channel_name: "2m Concord/Pembroke C4FM W1ALE"
+type: "C4FM"
+callsign: "W1ALE"
+frequency_hz: "146940000"
+mode: C4FM
+bandwidth: "16000"  # Overridden in all cases in the code right now.
+repeater_offset_khz: "600"
+repeater_shift: "-"
+ctcss_tone: "71.9"
+power: 25  # watts

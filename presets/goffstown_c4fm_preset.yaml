@@ -1,0 +1,9 @@
+nickname: "goffstown_c4fm"
+channel_name: "2m Goffstown Mt Unconoonuk C4FM"
+type: "Repeater"
+callsign: "W1AKS"
+frequency_hz: "147135000"
+mode: C4FM
+repeater_offset_khz: "600"
+ctcss_tone: "None"
+power: 25

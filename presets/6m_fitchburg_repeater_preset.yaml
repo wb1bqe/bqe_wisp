@@ -1,0 +1,10 @@
+nickname: "6m_fitchburg_repeater"
+channel_name: "6m Fitchburg repeater WB1EWS"
+type: "REPEATER"
+frequency_hz: "53830000"
+mode: "FM"
+bandwidth: "16000"  # Overridden in all cases in the code right now.
+repeater_offset_khz: "1000"
+repeater_shift: "-"
+ctcss_tone: "71.9"
+power: 50  # watts

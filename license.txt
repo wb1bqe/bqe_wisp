@@ -1,0 +1,205 @@
+BQE NONCOMMERCIAL SHARE-BACK LICENSE
+Version 0.5 — July 2026
+SPDX identifier: LicenseRef-BQE-NC-ShareBack-0.5
+
+Copyright (c) 2026 Al Lawler, WB1BQE. All rights reserved.
+
+IMPORTANT: This is a source-available license, not an Open Source Initiative
+approved open-source license. Commercial use is prohibited unless the Licensor
+gives separate written permission.
+
+1. DEFINITIONS
+
+“Licensor” means Al Lawler, WB1BQE, or any successor copyright holder who
+offers the Software under this License.
+
+“Software” means the source code, executable code, scripts, configuration
+templates, documentation, and other materials distributed with this License.
+
+“You” means the individual or legal entity exercising rights under this
+License.
+
+“Modification” means any change to the Software, including any bug fix,
+correction, enhancement, extension, adaptation, port, optimization, translation,
+or other derivative work based on the Software.
+
+“Noncommercial Purpose” means a purpose that is not intended for, directed
+toward, or used in connection with commercial advantage or monetary
+compensation. Noncommercial Purposes may include personal study, education,
+academic research, experimentation, amateur-radio activity, hobby projects,
+charitable work, and public-interest use, provided the use is not part of a
+paid service, commercial product, consulting engagement, contract deliverable,
+revenue-generating activity, or the internal operations of a for-profit
+business.
+
+“Commercial Use” includes, without limitation:
+
+(a) selling, licensing, sublicensing, renting, or otherwise charging for the
+    Software or a Modification;
+
+(b) incorporating the Software or a Modification into a product or service
+    that is sold, licensed, rented, subscription-based, advertising-supported,
+    or otherwise used to generate revenue;
+
+(c) using the Software or a Modification to provide paid consulting, hosting,
+    support, integration, data processing, or other services;
+
+(d) using the Software or a Modification as part of the internal operations
+    of a for-profit business or other activity intended to obtain commercial
+    advantage; or
+
+(e) distributing the Software or a Modification in exchange for money,
+    services, or other valuable consideration.
+
+2. NONCOMMERCIAL LICENSE GRANT
+
+Subject to full compliance with this License, the Licensor grants You a
+worldwide, royalty-free, non-exclusive license to:
+
+(a) use, run, study, and reproduce the Software for Noncommercial Purposes;
+
+(b) create Modifications for Noncommercial Purposes; and
+
+(c) distribute the Software and Modifications for Noncommercial Purposes in
+    accordance with Section 3.
+
+No permission is granted for Commercial Use. Commercial Use requires a
+separate written license from the Licensor.
+
+3. DISTRIBUTION CONDITIONS
+
+You may distribute copies of the Software or a Modification only when all of
+the following conditions are met:
+
+(a) the distribution is solely for Noncommercial Purposes;
+
+(b) each recipient receives a complete copy of this License;
+
+(c) all copyright, attribution, and license notices are preserved;
+
+(d) any Modification is clearly identified as modified and includes a
+    reasonable description of the changes and their date;
+
+(e) the complete corresponding source code for the distributed version is
+    provided at no charge, or is made available at no charge from a clearly
+    identified location for at least three years; and
+
+(f) the Software and every Modification are distributed under this same
+    License, without additional terms that restrict the rights granted here.
+
+You may charge only the actual, reasonable cost of physical media and
+shipping. Charging for access, downloading, support, services, or distribution
+is Commercial Use and is not permitted.
+
+4. REQUIRED SHARE-BACK OF MODIFICATIONS
+
+Every Modification You create must be shared back with the Licensor, whether
+or not You distribute the Modification.
+
+No later than thirty (90) days after You first complete, use, or test a
+Modification, whichever occurs first, You must provide the Licensor with:
+
+(a) the complete source code of the Modification, or a patch or version-control
+    changeset sufficient to reproduce it;
+
+(b) a brief description of the enhancement, bug fix, or other change; and
+
+(c) any reasonably necessary build or installation instructions.
+
+You must share the Modification by submitting it through the contribution
+mechanism of the original project repository. If no such mechanism is
+available, You must make the source code publicly available at no charge and
+notify the Licensor using the contact information contained in the Software or
+its documentation.
+
+You are not required to disclose passwords, private keys, personal data,
+third-party confidential information, or machine-specific secrets. Such
+information must be removed before the Modification is shared.
+
+By sharing a Modification, You grant the Licensor a perpetual, worldwide,
+royalty-free, irrevocable, non-exclusive copyright license to use, reproduce,
+modify, prepare derivative works from, and distribute that Modification as
+part of the Software under this License. You retain copyright in Your original
+contributions.
+
+5. ATTRIBUTION AND MARKING
+
+Redistributed copies and Modifications must retain the following notice:
+
+    Based on BQE software by Al Lawler, WB1BQE.
+    Licensed under the BQE Noncommercial Share-Back License 1.0.
+
+You may not state or imply that the Licensor endorses You, Your Modification,
+or Your use of the Software.
+
+6. NO TRADEMARK LICENSE
+
+This License does not grant permission to use the Licensor’s names, call signs,
+logos, product names, or trademarks except as reasonably necessary to provide
+the attribution required by Section 5.
+
+7. LIMITED PATENT LICENSE
+
+To the extent the Licensor owns patent claims that are necessarily infringed
+by using the unmodified Software, the Licensor grants You a worldwide,
+royalty-free, non-exclusive patent license solely for the Noncommercial
+Purposes permitted by this License.
+
+This patent license terminates immediately if You or an entity acting on Your
+behalf initiates a patent claim alleging that the Software or a Modification
+infringes a patent.
+
+8. THIRD-PARTY COMPONENTS
+
+Third-party software included with or used by the Software remains subject to
+its own license terms. This License does not replace, limit, or expand rights
+granted under a third-party license.
+
+9. TERMINATION AND REINSTATEMENT
+
+Your rights under this License terminate automatically if You violate any
+term.
+
+For a first violation, Your rights will be reinstated if You:
+
+(a) stop the violation;
+
+(b) correct its effects as far as reasonably possible; and
+
+(c) come into full compliance within thirty (30) days after receiving written
+    notice from the Licensor.
+
+Reinstatement does not prevent the Licensor from seeking relief for the period
+of violation. Repeated, intentional, or uncorrected violations terminate Your
+rights permanently unless the Licensor agrees otherwise in writing.
+
+10. DISCLAIMER OF WARRANTY
+
+THE SOFTWARE IS PROVIDED “AS IS” AND “AS AVAILABLE,” WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, RELIABILITY, OR
+ERROR-FREE OPERATION.
+
+11. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR AND CONTRIBUTORS WILL NOT
+BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR FOR LOSS OF DATA, PROFITS, REVENUE,
+GOODWILL, BUSINESS, OR USE, ARISING FROM OR RELATED TO THE SOFTWARE OR THIS
+LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+12. SEVERABILITY AND NO WAIVER
+
+If any provision of this License is held unenforceable, that provision will be
+modified only to the minimum extent necessary to make it enforceable, and the
+remaining provisions will continue in effect.
+
+A failure to enforce any provision is not a waiver of the right to enforce it
+later.
+
+13. ENTIRE LICENSE
+
+This License is the complete agreement governing the rights granted here. Any
+Commercial Use, exception, waiver, or additional permission must be in a
+separate written agreement signed by the Licensor.
+

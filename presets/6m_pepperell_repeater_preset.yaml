@@ -1,0 +1,10 @@
+nickname: "6m_pepperell_repeater"
+channel_name: "6m Pepperell repeater N1MNX"
+type: "REPEATER"
+frequency_hz: "53890000"
+mode: "FM"
+bandwidth: "16000"  # Overridden in all cases in the code right now.
+repeater_offset_khz: "1000"
+repeater_shift: "-"
+ctcss_tone: "100.0"
+power: 50  # watts

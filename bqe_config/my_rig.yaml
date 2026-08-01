@@ -1,0 +1,5 @@
+radio_type: 1
+radio_port: com3
+radio_baud: 9600
+radio_ft736r_intermediate_frequency_mhz: 50.1
+radio_idle_preset_nickname: 2m_ssb

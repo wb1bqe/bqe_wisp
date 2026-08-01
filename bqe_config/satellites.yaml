@@ -1,0 +1,236 @@
+
+# Every entry must have a unique nickname which is used to search for the 
+# data record.  (This allows for multiple entries for a satellite with different
+# downlink frequencies etc.)
+
+satellites:
+
+    #https://www.amsat.se/2024/11/29/asrtu-1-designated-asrtu-oscar-123/  sstv
+  - nickname: "ao-123"
+    satellite_type: "FM Voice"
+    satellite_name: "AO-123"
+    catalog_number: '61781'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '435.400'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: False
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "wizard-meteo"
+    satellite_type: "SSTV"
+    satellite_name: "WIZARD-METEO (RS38S)"
+    catalog_number: '57189'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '437.825'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "rs-18s"
+    satellite_type: "SSTV"
+    satellite_name: "SAKHACUBE-CHOLBO (RS18S)"
+    catalog_number: '67290'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '437.350'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "MONITOR3"
+    satellite_type: "SSTV"
+    satellite_name: "Monitor-3 (RS58S)"  # Note: Unable to find tle keps on amsat site.
+    catalog_number: '57180'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '435.290'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "iss-rpt"
+    satellite_type: "FM Voice"
+    satellite_name: "ISS"
+    catalog_number: '25544'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '437.800'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.990'
+    uplink_mode: 'FM'
+    bandwidth: '25000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: True   # 2m antennas are not currently mounted
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    
+  - nickname: "iss-aprs"  # Do not use with FT-736r due to same band uplink/downlink
+    satellite_type: "APRS"
+    satellite_name: "ISS"
+    catalog_number: '25544'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '437.825'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '437.825'
+    uplink_mode: 'FM'
+    bandwidth: '25000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: True   # 2m antennas are not currently mounted
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+
+  - nickname: "iss-school"  # Do not use with FT-736r due to same band uplink/downlink
+    satellite_type: "FM Voice"
+    satellite_name: "ISS"
+    catalog_number: '25544'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '145.800'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '437.825'  # Placeholder - school contacts are listen only. 
+    uplink_mode: 'FM'
+    bandwidth: '25000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: False   # 2m antennas are not currently mounted
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+    
+  - nickname: "sonate-2"
+    satellite_type: "satellite"
+    satellite_name: "SONATE-2"
+    catalog_number: '59112'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '145.825'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '435.850'
+    uplink_mode: 'FM'
+    bandwidth: '25000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: False   # 2m antennas are not currently mounted
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+
+  - nickname: "umka-1"
+    satellite_name: "UmKA 1 (RS40S)"
+    satellite_type: "SSTV"
+    catalog_number: '57172'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '437.625'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "so-50"
+    satellite_type: "FM Voice"
+    satellite_name: "SO-50"
+    catalog_number: '27607'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '145.850'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '436.795'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+
+  - nickname: "ao-91"
+    satellite_type: "FM Voice"
+    satellite_name: "AO-91"
+    catalog_number: '43017'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '145.960'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '436.250'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+
+  - nickname: "ao-07-beacon"
+    satellite_type: "Linear"
+    satellite_name: "ao-07"
+    catalog_number: '07530'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '145.700'
+    downlink_mode: 'USB'
+    uplink_frequency_mhz: '435.850'
+    uplink_mode: 'LSB'
+    bandwidth: '3000'
+    enable_antenna_tracking: False
+    enable_tuning: True
+    priority: '4'
+    auto_schedule: False
+
+  - nickname: "rs-44-beacon"
+    satellite_type: "linear"
+    satellite_name: "RS-44"
+    catalog_number: '44909'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '435.605'
+    downlink_mode: 'USB'
+    uplink_frequency_mhz: '144.800' # Not used - beacon is downlink only.
+    uplink_mode: 'LSB'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: False
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+
+  - nickname: "kwt-2"     # Active Aug1 - Aug2 2026
+    satellite_type: "SSTV"
+    satellite_name: "RS95S (QMR-KWT-2)"
+    catalog_number: '67291'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '435.950'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.800' # Not used - beacon is downlink only.
+    uplink_mode: 'LSB'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"

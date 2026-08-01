@@ -1,0 +1,9 @@
+nickname: "6m_wachusett_repeater"
+channel_name: "6m Wachusett repeater"
+frequency_hz: "53310000"
+mode: "FM"
+bandwidth: "16000"  # Overridden in all cases in the code right now.
+repeater_offset_khz: "1000"
+repeater_shift: "-"
+ctcss_tone: "71.9"
+power: 50  # watts

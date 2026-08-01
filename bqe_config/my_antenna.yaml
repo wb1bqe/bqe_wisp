@@ -1,0 +1,3 @@
+model: 1
+ip_address: ''
+start_rotctld: True   #Do not start if it is generally running due to other applications.

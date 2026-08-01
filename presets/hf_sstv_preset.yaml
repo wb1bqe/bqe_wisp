@@ -1,0 +1,7 @@
+nickname: "hf_sstv"
+channel_name: "20m SSTV on 14.230"  # 14.230 sstv calling freq
+type: "HF"
+frequency_hz: "14230000"
+mode: "USB"
+bandwidth: "3000"
+program_to_run_while_waiting: "c:/ham/mmsstv/mmsstv.exe"

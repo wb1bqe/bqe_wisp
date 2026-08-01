@@ -1,0 +1,7 @@
+nickname: "2m_ssb"
+channel_name: "2m SSB"  # monitor either wspr or ft8
+type: "SSB"
+frequency_hz: "144100000"
+mode: "USB"
+bandwidth: "3000"
+

@@ -1,0 +1,11 @@
+nickname: "bedford_c4fm" 
+channel_name: "2m Bedford C4FM"
+type: C4FM
+callsign: "N1QC"
+frequency_hz: "146685000"
+mode: C4FM
+bandwidth: "16000"  # Overridden in all cases in the code right now.
+repeater_offset_khz: "600"
+repeater_shift: "-"
+ctcss_tone: "100.0"
+power: 25  # watts

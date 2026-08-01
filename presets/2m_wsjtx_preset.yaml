@@ -1,0 +1,7 @@
+nickname: "2m_wsjtx"
+channel_name: "2m WSJTX"  # monitor either wspr or ft8
+type: "Digital"
+frequency_hz: "144174000"
+mode: "USB"
+bandwidth: "3000"
+program_to_run_while_waiting: "wsjtx"
