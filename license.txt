@@ -96,7 +96,7 @@ is Commercial Use and is not permitted.
 Every Modification You create must be shared back with the Licensor, whether
 or not You distribute the Modification.
 
-No later than thirty (90) days after You first complete, use, or test a
+No later than thirty (30) days after You first complete, use, or test a
 Modification, whichever occurs first, You must provide the Licensor with:
 
 (a) the complete source code of the Modification, or a patch or version-control
