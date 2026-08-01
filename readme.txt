@@ -1,19 +1,17 @@
 
 bqe_wisp
 
-  (Created with admiration and respect to Chris Jackson  (G7UPN) for his marvelous wisp software many years ago)
+  (Created with admiration and respect for Chris Jackson  (G7UPN) for his marvelous Wisp software many years ago)
 
 
-This set of scripts mimics the major functions of wisp in a command line interface to track the many SSTV microsats currently available. 
+This set of scripts mimics the major functions of the original wisp in a command line interface to track the many SSTV satellites that are currently available.   A browser based UI is also available once the server has been started.
 
-It can download keps,  then generate a schedule of satellites to be tracked,  then will wait for each satellite to come over the horizon and will tune to the downlink, and apply doppler tracking in real time.   Support for FM repeater satellites will be added shortly.
+BQE Wisp can download Keplerian elements,  then generate a schedule of satellites to be tracked,  then will wait for each satellite to come over the horizon and will tune to the downlink, and apply doppler tracking in real time.  
 
-This software does not currently run any other software at the beginning of the pass.  (The expected use case is that mmsstv or similar will already be running and waiting for audio from the satellites as they come overhead.) 
+Other optional programs (For example, mmsstv, qsstv (Linux), telemetry decoders, or wsjtx) can be configured to be launched during specific satellite passes.   Likewise,  an "Idle task" including both a frequency to monitor, and a program to run while monitoring can be configured to maximize rig utilization and enjoyment between passes. 
 
-Satellites have priorities.  In the event of conflicting passes, the higher priority satellite will be selected. (This still needs to be tested, and more intelligent decision making about sharing a timeslot between satellites might be possible.)
-
-In between passes, the rig can be switched to 14.230 (Or other user selectable frequency/mode).  
-
+Support:
+  Best effort support is available from wb1bqe@gmail.com
 
 
 To run:
@@ -23,7 +21,7 @@ To run:
   Setup:
   
 	Clone this repo
-	update my_qth.yaml and my_rig.yaml as appropriate for your qth
+	update bqe_config/my_qth.yaml and bqe_config/my_rig.yaml as appropriate for your qth
 	% python - Install python libraries using the following command(s)
  		python -m pip install numpy skyfield PyYaml argparse datetime
 
@@ -31,7 +29,7 @@ To run:
 
   To run:
 
-	% python bqe_update_keps.py
+	% python bqe_update_keps.py  (DO NOT RUN THIS MORE THAN ONCE PER DAY TO AVOID BEING BLOCKED BY DOWNLOAD SITE)
         % python bqe_schedule_passes.py  --nickname <sat_name1>  --nickname <sat_name2>  etc.
 
 		Creates a file called schedule.json with pass information.   (Each satellite is referred to by a 			"nickname" which refers to a yaml file containing the specifics of the satellite.)
@@ -40,3 +38,7 @@ To run:
 	% python bqe_wisp.py
 		Reads the schedule file and waits for satellites to come into view.  As each satellite comes
 		into view,  it calls bqe_track_continuously.py,  which performs doppler corrections during the pass.
+
+   		Once BQE Wisp has been started,  the UI can be viewed at  http://localhost:8028
+
+
