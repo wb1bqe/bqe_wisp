@@ -21,7 +21,6 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
 
   - nickname: "wizard-meteo"
     satellite_type: "SSTV"
@@ -144,6 +143,23 @@ satellites:
     catalog_number: '57172'
     satellite_mode_required: True
     downlink_frequency_mhz: '437.625'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "utmn-2"
+    satellite_name: "UTMN 2 (RS27S)"
+    satellite_type: "SSTV"
+    catalog_number: '57203'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '436.125'
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
