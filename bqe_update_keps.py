@@ -14,8 +14,18 @@ local_file = "keps.txt"
 monitor3_url='https://celestrak.org/NORAD/elements/gp.php?CATNR=57180&FORMAT=3le'
 local_file = 'keps.txt'
 
+monitor4_url='https://celestrak.org/NORAD/elements/gp.php?CATNR=57182&FORMAT=3le'
+local_file = 'keps.txt'
+
 utmn2_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=57203&FORMAT=3le'
 local_file = 'keps.txt'
+
+otp2_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=63235&FORMAT=3le'
+local_file = 'keps.txt'
+
+rs61_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=64881&FORMAT=3le'
+local_file = 'keps.txt'
+
 
 def do_update(local_file, source_url, update_mode):  #update_mode is write for first call, then append for subsequent.
 
@@ -55,7 +65,11 @@ def main():
     do_update("keps.tmp", keps_url,"w")
     do_update("keps.tmp", wizard_meteo_url, "a") # rs38s wizard-meteo
     do_update("keps.tmp", monitor3_url, "a")     # Monitor-3
+    do_update("keps.tmp", monitor4_url, "a")     # Monitor-4
     do_update("keps.tmp", utmn2_url, "a")        # rs27/utmn-2
+    do_update("keps.tmp", otp2_url, "a")        # otp-2
+    do_update("keps.tmp", rs61_url, "a")        # 239alferov
+    
 
     remove_blank_lines("keps.tmp", "keps.txt")
 

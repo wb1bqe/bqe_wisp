@@ -39,6 +39,23 @@ satellites:
     auto_schedule: True
     program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
 
+  - nickname: "rs61"
+    satellite_type: "SSDV"
+    satellite_name: "239ALFEROV (RS61S)"
+    catalog_number: '64881'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '436.270'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+    program_to_run_during_pass:  "tbd" # User supplied SSDV decoder
+
   - nickname: "rs-18s"
     satellite_type: "SSTV"
     satellite_name: "SAKHACUBE-CHOLBO (RS18S)"
@@ -72,6 +89,24 @@ satellites:
     priority: '3'
     auto_schedule: True
     program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "MONITOR4"
+    satellite_type: "SSTV"
+    satellite_name: "Monitor-4 (RS57S)"  # Note: Unable to find tle keps on amsat site.
+    catalog_number: '57182'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '436.080'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
 
   - nickname: "iss-rpt"
     satellite_type: "FM Voice"
@@ -213,10 +248,27 @@ satellites:
     uplink_frequency_mhz: '435.850'
     uplink_mode: 'LSB'
     bandwidth: '3000'
+    ctcss_tone: '0'
     enable_antenna_tracking: False
     enable_tuning: True
     priority: '4'
     auto_schedule: False
+
+  - nickname: "rs-44-beacon"
+    satellite_type: "Linear"
+    satellite_name: "RS-44"
+    catalog_number: '44909'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '435.605'
+    downlink_mode: 'USB'
+    uplink_frequency_mhz: '145.935'  # Not used - beacon is downlink only.
+    uplink_mode: 'LSB'
+    bandwidth: '3000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '4'
+    auto_schedule: True
 
   - nickname: "rs-44-beacon"
     satellite_type: "linear"
@@ -250,3 +302,19 @@ satellites:
     priority: '3'
     auto_schedule: True
     program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+
+  - nickname: "OTP-2"
+    satellite_type: "BEACON"
+    satellite_name: ""
+    catalog_number: '63235'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '400.500'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.850'
+    uplink_mode: 'FM'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True

@@ -3,13 +3,14 @@
 
 """HTTP request handler for the BQE WISP web console."""
 
+import html
 import json
 import re
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Union
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import yaml
 
@@ -45,6 +46,7 @@ class WebConsoleSettings:
 
     ui_refresh_interval_seconds: float
     ui_port: int
+    sstv_gallery_location: str = ""
 
     @property
     def ui_refresh_interval_ms(self) -> int:
@@ -118,6 +120,7 @@ def load_web_console_settings(
     merged_settings: dict[str, Any] = {
         "ui_refresh_interval": DEFAULT_UI_REFRESH_INTERVAL_SECONDS,
         "ui_port": DEFAULT_UI_PORT,
+        "sstv_gallery_location": "",
     }
     merged_settings.update(sections.get("bqe_wisp", {}))
     merged_settings.update(sections.get("bqe_wisp_web", {}))
@@ -125,6 +128,7 @@ def load_web_console_settings(
     return WebConsoleSettings(
         ui_refresh_interval_seconds=_parse_seconds(merged_settings["ui_refresh_interval"]),
         ui_port=_parse_port(merged_settings["ui_port"]),
+        sstv_gallery_location=str(merged_settings.get("sstv_gallery_location") or "").strip(),
     )
 
 
@@ -447,6 +451,224 @@ def read_license_payload() -> Mapping[str, Any]:
             "content": "",
             "message": f"Could not read license file {LICENSE_PATH}: {exc}",
         }
+
+
+def resolve_sstv_images_directory(configured_location: str) -> Optional[Path]:
+    """Resolve the configured SSTV image folder relative to the program directory."""
+    location = str(configured_location or "").strip()
+    if not location:
+        return None
+
+    directory = Path(location).expanduser()
+    if not directory.is_absolute():
+        directory = SCRIPT_DIR / directory
+    return directory.resolve()
+
+
+def list_sstv_jpg_files(configured_location: str) -> tuple[Optional[Path], list[Path], str]:
+    """Return safe, top-level .jpg files from the configured SSTV folder."""
+    directory = resolve_sstv_images_directory(configured_location)
+    if directory is None:
+        return None, [], "sstv_gallery_location is not set in general_settings.yaml."
+    if not directory.exists():
+        return directory, [], f"The configured SSTV image folder does not exist: {directory}"
+    if not directory.is_dir():
+        return directory, [], f"The configured SSTV image location is not a folder: {directory}"
+
+    try:
+        jpg_files = []
+        for entry in directory.iterdir():
+            if entry.suffix.casefold() != ".jpg" or not entry.is_file():
+                continue
+            # Do not expose a symlink that resolves outside the configured folder.
+            if entry.resolve().parent != directory:
+                continue
+            jpg_files.append(entry)
+        # Default gallery order is by file modification timestamp, newest first.
+        # Filename is used as a stable tie-breaker when timestamps are identical.
+        jpg_files.sort(key=lambda path: (-path.stat().st_mtime, path.name.casefold()))
+        message = "" if jpg_files else f"No JPG files were found in {directory}."
+        return directory, jpg_files, message
+    except OSError as exc:
+        return directory, [], f"Could not read the configured SSTV image folder: {exc}"
+
+
+def resolve_sstv_image_file(configured_location: str, requested_name: str) -> Optional[Path]:
+    """Resolve one requested JPG without allowing access outside the configured folder."""
+    directory = resolve_sstv_images_directory(configured_location)
+    name = str(requested_name or "")
+    if directory is None or not name or Path(name).name != name:
+        return None
+    if Path(name).suffix.casefold() != ".jpg":
+        return None
+
+    try:
+        candidate = (directory / name).resolve()
+        if candidate.parent != directory or not candidate.is_file():
+            return None
+        return candidate
+    except OSError:
+        return None
+
+
+def build_sstv_gallery_html(configured_location: str) -> str:
+    """Build the independent SSTV thumbnail-gallery page."""
+    directory, jpg_files, message = list_sstv_jpg_files(configured_location)
+    cards = []
+    for image_path in jpg_files:
+        safe_name = html.escape(image_path.name)
+        image_url = "/sstv-image?name=" + quote(image_path.name, safe="")
+        modified_timestamp = image_path.stat().st_mtime
+        cards.append(
+            '<a class="image-card" href="{url}" target="_blank" rel="noopener" '
+            'title="Open {name} full size" data-filename="{sort_name}" data-mtime="{mtime:.6f}">'
+            '<img src="{url}" alt="{name}" loading="lazy">'
+            '<span>{name}</span></a>'.format(
+                url=image_url,
+                name=safe_name,
+                sort_name=html.escape(image_path.name.casefold(), quote=True),
+                mtime=modified_timestamp,
+            )
+        )
+
+    source_text = html.escape(str(directory)) if directory is not None else "Not configured"
+    if message:
+        content = f'<div class="gallery-message">{html.escape(message)}</div>'
+    else:
+        content = '<div class="gallery">' + "".join(cards) + "</div>"
+
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BQE WISP SSTV Gallery</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #b9b9b9;
+      color: #111;
+      font-family: "Courier New", Consolas, monospace;
+      font-weight: 700;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 12px 16px;
+      background: linear-gradient(180deg, #eeeeee, #bdbdbd);
+      border-bottom: 2px ridge #d2d2d2;
+      box-shadow: 0 2px 4px rgba(0,0,0,.25);
+    }
+    h1 { margin: 0; font-size: 24px; }
+    .source { margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+    .gallery-controls {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    button {
+      flex: 0 0 auto;
+      padding: 7px 14px;
+      border: 2px outset #e4e4e4;
+      background: #d2d2d2;
+      color: #111;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:active { border-style: inset; }
+    button.sort-active {
+      border-style: inset;
+      background: #bcbcbc;
+    }
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 14px;
+      padding: 16px;
+    }
+    .image-card {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      padding: 8px;
+      border: 2px outset #e4e4e4;
+      background: #d2d2d2;
+      color: #111;
+      text-decoration: none;
+    }
+    .image-card:hover, .image-card:focus { background: #e2e2e2; outline: 3px solid #05058a; }
+    .image-card img {
+      width: 100%;
+      height: 180px;
+      object-fit: contain;
+      background: #202020;
+      border: 2px inset #d0d0d0;
+    }
+    .image-card span {
+      padding: 8px 3px 2px;
+      overflow-wrap: anywhere;
+      text-align: center;
+      font-size: 14px;
+    }
+    .gallery-message {
+      margin: 24px;
+      padding: 18px;
+      border: 2px inset #d0d0d0;
+      background: #d2d2d2;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>SSTV Gallery</h1><div class="source">Folder: __SOURCE__</div></div>
+    <div class="gallery-controls">
+      <button type="button" id="sortFilenameButton" onclick="sortGallery('filename')">Sort by Filename</button>
+      <button type="button" id="sortTimestampButton" class="sort-active" onclick="sortGallery('timestamp')">Sort by Timestamp</button>
+      <button type="button" onclick="window.location.reload()">Refresh</button>
+    </div>
+  </header>
+  __CONTENT__
+  <script>
+    function sortGallery(sortMode) {
+      const gallery = document.querySelector('.gallery');
+      if (!gallery) return;
+
+      const cards = Array.from(gallery.querySelectorAll('.image-card'));
+      cards.sort((left, right) => {
+        if (sortMode === 'filename') {
+          return left.dataset.filename.localeCompare(right.dataset.filename, undefined, {
+            numeric: true,
+            sensitivity: 'base'
+          });
+        }
+
+        const leftTime = Number(left.dataset.mtime || 0);
+        const rightTime = Number(right.dataset.mtime || 0);
+        if (rightTime !== leftTime) return rightTime - leftTime;
+        return left.dataset.filename.localeCompare(right.dataset.filename, undefined, {
+          numeric: true,
+          sensitivity: 'base'
+        });
+      });
+
+      cards.forEach(card => gallery.appendChild(card));
+      document.getElementById('sortFilenameButton')?.classList.toggle('sort-active', sortMode === 'filename');
+      document.getElementById('sortTimestampButton')?.classList.toggle('sort-active', sortMode === 'timestamp');
+    }
+  </script>
+</body>
+</html>
+""".replace("__SOURCE__", source_text).replace("__CONTENT__", content)
 
 
 def write_create_preset_payload(request_payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1239,6 +1461,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       <div class="submenu" role="menu" aria-label="View menu">
         <button type="button" role="menuitemcheckbox" aria-checked="false" id="mapMenuItem">Map</button>
         <button type="button" role="menuitemcheckbox" aria-checked="false" id="presetMenuItem">Show Presets</button>
+        <button type="button" role="menuitem" id="sstvFilesMenuItem">SSTV Gallery</button>
       </div>
     </div>
     <div class="menu config-menu" role="none">
@@ -1582,6 +1805,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     let lastMapStatus = null;
     const detachedMapMode = new URLSearchParams(window.location.search).get('detached_map') === '1';
     let detachedMapWindow = null;
+    let sstvFilesWindow = null;
     let detachedMapCloseMonitor = null;
     let detachedMapResizeTimer = null;
     let presetCommandInFlight = false;
@@ -2575,6 +2799,22 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       return true;
     }
 
+    function openSstvFilesWindow() {
+      if (sstvFilesWindow && !sstvFilesWindow.closed) {
+        sstvFilesWindow.focus();
+        return;
+      }
+
+      sstvFilesWindow = window.open(
+        '/sstv-files',
+        'bqeWispSstvFiles',
+        'popup=yes,width=1050,height=760,resizable=yes,scrollbars=yes'
+      );
+      if (!sstvFilesWindow) {
+        set('message', 'The SSTV Gallery window was blocked by the browser. Allow popups for this site and try again.');
+      }
+    }
+
     function setMapVisible(visible) {
       mapVisible = Boolean(visible);
       const consoleElement = document.querySelector('.console');
@@ -3034,6 +3274,10 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     if (presetMenuItem) {
       presetMenuItem.addEventListener('click', togglePresetVisibility);
     }
+    const sstvFilesMenuItem = document.getElementById('sstvFilesMenuItem');
+    if (sstvFilesMenuItem) {
+      sstvFilesMenuItem.addEventListener('click', openSstvFilesWindow);
+    }
     setPresetsVisible(false);
 
     if (detachedMapMode) {
@@ -3227,11 +3471,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         status_payload_func: StatusPayloadFunc,
         command_payload_func: Optional[CommandPayloadFunc] = None,
         index_html: Optional[str] = None,
+        sstv_gallery_location: str = "",
         **kwargs: Any,
     ) -> None:
         self._status_payload_func = status_payload_func
         self._command_payload_func = command_payload_func
         self._index_html = index_html if index_html is not None else INDEX_HTML
+        self._sstv_gallery_location = str(sstv_gallery_location or "")
         super().__init__(*args, **kwargs)
 
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -3241,6 +3487,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def send_bytes(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
@@ -3262,9 +3509,28 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         return payload if isinstance(payload, Mapping) else {}
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
         if path in ("/", "/index.html"):
             self.send_bytes(200, "text/html; charset=utf-8", self._index_html.encode("utf-8"))
+            return
+
+        if path == "/sstv-files":
+            gallery_html = build_sstv_gallery_html(self._sstv_gallery_location)
+            self.send_bytes(200, "text/html; charset=utf-8", gallery_html.encode("utf-8"))
+            return
+
+        if path == "/sstv-image":
+            requested_name = parse_qs(parsed_url.query).get("name", [""])[0]
+            image_path = resolve_sstv_image_file(self._sstv_gallery_location, requested_name)
+            if image_path is None:
+                self.send_bytes(404, "text/plain; charset=utf-8", b"SSTV image not found")
+                return
+            try:
+                self.send_bytes(200, "image/jpeg", image_path.read_bytes())
+            except OSError as exc:
+                message = f"Could not read SSTV image: {exc}".encode("utf-8", errors="replace")
+                self.send_bytes(500, "text/plain; charset=utf-8", message)
             return
 
         if path == "/api/status":

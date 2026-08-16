@@ -2086,14 +2086,16 @@ def start_web_console(port=None):
     """Start the web console in a background daemon thread."""
     global WEB_SERVER
 
+    web_settings = load_web_console_settings(GENERAL_SETTINGS_FILE)
     if port is None:
-        port = get_web_console_port(GENERAL_SETTINGS_FILE)
+        port = web_settings.ui_port
 
     handler_factory = partial(
         WebConsoleHandler,
         status_payload_func=status_payload,
         command_payload_func=handle_web_command,
-        index_html=make_web_console_index_html(),
+        index_html=build_index_html(web_settings),
+        sstv_gallery_location=web_settings.sstv_gallery_location,
     )
     server = ThreadingHTTPServer(("0.0.0.0", port), handler_factory)
     WEB_SERVER = server

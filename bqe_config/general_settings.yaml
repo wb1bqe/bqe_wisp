@@ -9,6 +9,7 @@ program_settings:
       ui_port: 8028
       sleep_interval: 30 # Seconds
       sleep_interval_high_elevation: 10 # Seconds
+      sstv_gallery_location: 'c:/ham/mmsstv/history'  # Full or relative path
 
   - bqe_wisp_web:
       placeholder_key: ''
@@ -21,11 +22,9 @@ program_settings:
       tle_file: 'keps.txt'
       satellite_config_file: 'bqe_config/satellites.yaml'  # TODO - this not needed?
       antenna_request_timeout: '5'  # Seconds
-      tle_file: 'keps.txt'
-      satellite_config: 'bqe_config/satellites.yaml'  #TODO This should become satellite_config_file here & in code.
-      qth_config: 'bqe_config/my_qth.yaml'  # TODO - move this to common section
+      satellite_config: 'bqe_config/satellites.yaml'
+      qth_config: 'bqe_config/my_qth.yaml'
       radio_config: 'bqe_config/my_rig.yaml'
-    #status_file: None,
       default_rigctld_pid_file: 'logs/rigctld.pid'
       default_pass_program_pid_file: 'logs/pass_program.pid'
       sleep_interval_seconds: '30'
