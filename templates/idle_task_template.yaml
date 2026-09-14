@@ -1,0 +1,12 @@
+# This template controls what the user sees for fields in the Menu "Config -> Create Preset" menu action.
+nickname: ""          # Nicknames need to be unique and lower case with no spaces or special chars.
+channel_name: ""      # monitor either wspr or ft8
+type: "Digital"       # {Digital, Analog, FM, SSB etc.  Intended for future use. }
+frequency_hz: ""      # Frequency in hz
+mode: ""              # {USB, USB, LSB, FM, FMN, C4FM, CW, CWN etc. }
+repeater_offset_khz: ""
+repeater_shift: ""    # +, - or 0 or leave blank
+ctcss_tone: "0"
+bandwidth: ""
+power: ""
+program_to_run_while_waiting: ""

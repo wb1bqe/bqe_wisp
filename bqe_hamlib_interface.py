@@ -167,11 +167,37 @@ def rigctld_disable_satellite_mode(rigctld_port):
 
 def rigctld_set_downlink_frequency(downlink_frequency_hz, rigctld_port):
     cmd = f"F {downlink_frequency_hz}"
-    print(send_rig_command(cmd, rigctld_port))
+    response = send_rig_command(cmd, rigctld_port)
+    print(response)
+    return response
+
+def rigctld_get_downlink_frequency(rigctld_port):
+    """Return the radio's current receive/VFO frequency in Hz."""
+    response = send_rig_command("f", rigctld_port)
+    for line in response.splitlines():
+        value = line.strip()
+        try:
+            return float(value)
+        except ValueError:
+            continue
+    raise RuntimeError(f"Could not read receive frequency from rigctld: {response!r}")
 
 def rigctld_set_uplink_frequency(uplink_frequency_hz, rigctld_port):
     cmd = f"I {uplink_frequency_hz}"
-    print(send_rig_command(cmd, rigctld_port))
+    response = send_rig_command(cmd, rigctld_port)
+    print(response)
+    return response
+
+def rigctld_get_uplink_frequency(rigctld_port):
+    """Return the radio's current split/transmit frequency in Hz."""
+    response = send_rig_command("i", rigctld_port)
+    for line in response.splitlines():
+        value = line.strip()
+        try:
+            return float(value)
+        except ValueError:
+            continue
+    raise RuntimeError(f"Could not read uplink frequency from rigctld: {response!r}")
 
 def rigctld_set_downlink_mode(downlink_mode, rigctld_port):
     cmd = f"M {downlink_mode} 0"
@@ -399,4 +425,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

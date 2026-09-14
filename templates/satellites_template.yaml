@@ -251,13 +251,6 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/so-50
 
   - nickname: "ao-91"
     satellite_type: "FM Voice"

@@ -24,7 +24,7 @@ import shlex
 import shutil
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import partial
 from http.server import ThreadingHTTPServer
 from bqe_wisp_web import (
@@ -52,13 +52,25 @@ except ImportError:
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GENERAL_SETTINGS_FILE = os.path.join(SCRIPT_DIR, "bqe_config", "general_settings.yaml")
+FDT_RECALCULATION_INTERVAL_MIN = 4.0
+FDT_RECALCULATION_INTERVAL_MAX = 30.0
 
-# TODO -Review sleep intervals and see if we need them,as they are likely in bqe_track_continuously.
 DEFAULT_GENERAL_SETTINGS = {
     "python_path": sys.executable or "python",
-    "sleep_interval_seconds": 60,
-    "sleep_interval_high_elevation_seconds": 10,
+    # Scheduler/web-server polling cadence. This is intentionally separate from
+    # the satellite tracking/Doppler cadence in bqe_track_continuously.
+    "scheduler_sleep_interval_seconds": 30.0,
+    # Tracking-loop cadence defaults. These are read from the
+    # bqe_track_continuously section and also shown by the FDT Console.
+    "tracking_sleep_interval_seconds": 10.0,
+    "tracking_sleep_interval_high_elevation_seconds": 3.0,
+    "tracking_high_pass_elevation": 65.0,
     "horizon_threshold_elevation": 0.1,
+    "web_command_timeout_seconds": 300,
+    "test_pass_azimuth": 45.0,
+    "test_pass_elevation": 45.0,
+    "test_pass_doppler": 3028.0,
+    "fdt_recalculation_interval": 10.0,
     "rigctld_port": 4532,
     "rigctl_path": "rigctl",
     "rigctld_path": "rigctld",
@@ -148,21 +160,17 @@ def load_general_settings(filename=GENERAL_SETTINGS_FILE):
     program_settings = root.get("program_settings") or {}
     common_settings = _settings_section(program_settings, "common")
     wisp_settings = _settings_section(program_settings, "bqe_wisp")
+    track_settings = _settings_section(program_settings, "bqe_track_continuously")
     third_party_settings = _settings_section(program_settings, "third_party")
 
     python_path = common_settings.get("python_path")
     if python_path is not None and str(python_path).strip():
         settings["python_path"] = str(python_path).strip()
 
-    settings["sleep_interval_seconds"] = _coerce_seconds(
-        wisp_settings.get("sleep_interval"),
-        settings["sleep_interval_seconds"],
-        "program_settings.bqe_wisp.sleep_interval",
-    )
-    settings["sleep_interval_high_elevation_seconds"] = _coerce_seconds(
-        wisp_settings.get("sleep_interval_high_elevation"),
-        settings["sleep_interval_high_elevation_seconds"],
-        "program_settings.bqe_wisp.sleep_interval_high_elevation",
+    settings["scheduler_sleep_interval_seconds"] = _coerce_seconds(
+        wisp_settings.get("scheduler_sleep_interval"),
+        settings["scheduler_sleep_interval_seconds"],
+        "program_settings.bqe_wisp.scheduler_sleep_interval",
     )
 
     settings["horizon_threshold_elevation"] = _coerce_float(
@@ -170,6 +178,65 @@ def load_general_settings(filename=GENERAL_SETTINGS_FILE):
         settings["horizon_threshold_elevation"],
         "program_settings.bqe_wisp.horizon_threshold_elevation",
     )
+
+    settings["web_command_timeout_seconds"] = _coerce_seconds(
+        wisp_settings.get("web_command_timeout_seconds"),
+        settings["web_command_timeout_seconds"],
+        "program_settings.bqe_wisp.web_command_timeout_seconds",
+    )
+
+    settings["tracking_sleep_interval_seconds"] = _coerce_seconds(
+        track_settings.get("sleep_interval"),
+        settings["tracking_sleep_interval_seconds"],
+        "program_settings.bqe_track_continuously.sleep_interval",
+    )
+    settings["tracking_sleep_interval_high_elevation_seconds"] = _coerce_seconds(
+        track_settings.get("sleep_interval_high_elevation"),
+        settings["tracking_sleep_interval_high_elevation_seconds"],
+        "program_settings.bqe_track_continuously.sleep_interval_high_elevation",
+    )
+    settings["tracking_high_pass_elevation"] = _coerce_float(
+        track_settings.get("high_pass_elevation"),
+        settings["tracking_high_pass_elevation"],
+        "program_settings.bqe_track_continuously.high_pass_elevation",
+    )
+
+    settings["test_pass_azimuth"] = _coerce_float(
+        track_settings.get("test_pass_azimuth"),
+        settings["test_pass_azimuth"],
+        "program_settings.bqe_track_continuously.test_pass_azimuth",
+    )
+    settings["test_pass_elevation"] = _coerce_float(
+        track_settings.get("test_pass_elevation"),
+        settings["test_pass_elevation"],
+        "program_settings.bqe_track_continuously.test_pass_elevation",
+    )
+    settings["test_pass_doppler"] = _coerce_float(
+        track_settings.get("test_pass_doppler"),
+        settings["test_pass_doppler"],
+        "program_settings.bqe_track_continuously.test_pass_doppler",
+    )
+    settings["fdt_recalculation_interval"] = _coerce_seconds(
+        track_settings.get("fdt_recalculation_interval"),
+        settings["fdt_recalculation_interval"],
+        "program_settings.bqe_track_continuously.fdt_recalculation_interval",
+    )
+    if not (
+            FDT_RECALCULATION_INTERVAL_MIN
+            <= settings["fdt_recalculation_interval"]
+            <= FDT_RECALCULATION_INTERVAL_MAX):
+        original_interval = settings["fdt_recalculation_interval"]
+        settings["fdt_recalculation_interval"] = min(
+            FDT_RECALCULATION_INTERVAL_MAX,
+            max(FDT_RECALCULATION_INTERVAL_MIN, original_interval),
+        )
+        print(
+            "Warning: general_settings.yaml setting "
+            "'program_settings.bqe_track_continuously.fdt_recalculation_interval' "
+            f"must be between {FDT_RECALCULATION_INTERVAL_MIN:g} and "
+            f"{FDT_RECALCULATION_INTERVAL_MAX:g} seconds; using "
+            f"{settings['fdt_recalculation_interval']:g}."
+        )
 
     settings["rigctld_port"] = _coerce_int(
         third_party_settings.get("rigctld_port"),
@@ -193,11 +260,25 @@ RIGCTLD_PORT = GENERAL_SETTINGS["rigctld_port"]
 RIGCTL_PATH = GENERAL_SETTINGS["rigctl_path"]
 RIGCTLD_PATH = GENERAL_SETTINGS["rigctld_path"]
 WEB_CONSOLE_PORT = get_web_console_port(GENERAL_SETTINGS_FILE)
-SCHEDULER_SLEEP_INTERVAL_SECONDS = GENERAL_SETTINGS["sleep_interval_seconds"]
-SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS = GENERAL_SETTINGS["sleep_interval_high_elevation_seconds"]
+SCHEDULER_SLEEP_INTERVAL_SECONDS = GENERAL_SETTINGS["scheduler_sleep_interval_seconds"]
 HORIZON_THRESHOLD_ELEVATION = GENERAL_SETTINGS["horizon_threshold_elevation"]
+WEB_COMMAND_TIMEOUT_SECONDS = GENERAL_SETTINGS["web_command_timeout_seconds"]
+TEST_PASS_AZIMUTH = GENERAL_SETTINGS["test_pass_azimuth"]
+TEST_PASS_ELEVATION = GENERAL_SETTINGS["test_pass_elevation"]
+TEST_PASS_DOPPLER = GENERAL_SETTINGS["test_pass_doppler"]
+TRACKING_SLEEP_INTERVAL_SECONDS = GENERAL_SETTINGS["tracking_sleep_interval_seconds"]
+TRACKING_SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS = GENERAL_SETTINGS["tracking_sleep_interval_high_elevation_seconds"]
+TRACKING_HIGH_PASS_ELEVATION = GENERAL_SETTINGS["tracking_high_pass_elevation"]
+# The FDT slider starts at the YAML normal tracking interval, but remains in
+# automatic elevation-based mode until the operator actually moves it.
+FDT_RECALCULATION_INTERVAL = min(
+    FDT_RECALCULATION_INTERVAL_MAX,
+    max(FDT_RECALCULATION_INTERVAL_MIN, TRACKING_SLEEP_INTERVAL_SECONDS),
+)
 
 SCHEDULE_FILE = os.path.join(SCRIPT_DIR, "schedule.json")
+SATELLITE_CONFIG_FILE = os.path.join(SCRIPT_DIR, "bqe_config", "satellites.yaml")
+SCHEDULE_PASSES_SCRIPT = os.path.join(SCRIPT_DIR, "bqe_schedule_passes.py")
 PRESETS_DIR = os.path.join(SCRIPT_DIR, "presets")
 QTH_CONFIG_FILE = os.path.join(SCRIPT_DIR, "bqe_config", "my_qth.yaml")
 TRACKING_SCRIPT = os.path.join(SCRIPT_DIR, "bqe_track_continuously.py")
@@ -206,12 +287,16 @@ STATUS_FILE = os.path.join(LOG_DIR, "bqe_wisp_tracking_status.json")
 RIGCTLD_PID_FILE = os.path.join(LOG_DIR, "rigctld.pid")
 PASS_PROGRAM_PID_FILE = os.path.join(LOG_DIR, "pass_program.pid")
 LEGACY_PASS_PROGRAM_PID_FILE = os.path.join(LOG_DIR, "pass_program_pid")
+TRACKING_STOP_FILE = os.path.join(LOG_DIR, "tracking_stop.request")
 IDLE_WAIT_PROGRAM_PID_FILE = os.path.join(LOG_DIR, "idle_wait_program.pid")
+ANTENNA_TRACKING_OVERRIDE_FILE = os.path.join(LOG_DIR, "antenna_tracking_override.json")
+FDT_CONTROL_FILE = os.path.join(LOG_DIR, "fdt_control.json")
+FDT_WHEEL_STEP_HZ = 200.0
 IDLE_TASK_STATUS_FILE = os.path.join(SCRIPT_DIR, "logs", "idle_task.yaml")
 UPDATE_KEPS_SCRIPT = os.path.join(SCRIPT_DIR, "bqe_update_keps.py")
-WEB_COMMAND_TIMEOUT_SECONDS = 300
 
 STATE_LOCK = threading.RLock()
+FDT_TUNING_LOCK = threading.RLock()
 APP_STATE = {
     "passes": [],
     "current_pass_key": None,
@@ -227,12 +312,17 @@ APP_STATE = {
     "last_command_result": None,
     "shutdown_requested": False,
     "restart_requested": False,
+    "fdt_recalculation_interval": FDT_RECALCULATION_INTERVAL,
+    "fdt_recalculation_interval_override": None,
     "presets": [],
     "preset_command_running": False,
     "idle_task_active": False,
+    # None = use each satellite's YAML value; bool = temporary Tracking-menu override.
+    "antenna_tracking_override": None,
 }
 
 SHUTDOWN_EVENT = threading.Event()
+CURRENT_PASS_END_EVENT = threading.Event()
 CURRENT_TRACKING_PROCESS = None
 CURRENT_IDLE_PROCESS = None
 CURRENT_WEB_COMMAND_PROCESS = None
@@ -385,6 +475,448 @@ def refresh_schedule_state(filename=SCHEDULE_FILE):
     return passes
 
 
+
+def _write_schedule_atomic(schedule, filename=SCHEDULE_FILE):
+    """Write schedule JSON atomically so browser/status readers never see a partial file."""
+    directory = os.path.dirname(os.path.abspath(filename))
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temporary_file = filename + ".tmp"
+    with open(temporary_file, "w", encoding="utf-8") as f:
+        json.dump(schedule, f, indent=2)
+        f.write("\n")
+    os.replace(temporary_file, filename)
+
+
+def load_test_pass_satellites(filename=SATELLITE_CONFIG_FILE):
+    """Return satellite choices from bqe_config/satellites.yaml for the test-pass dialog."""
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to read satellites.yaml.")
+    with open(filename, "r", encoding="utf-8") as f:
+        root = yaml.safe_load(f) or {}
+    if not isinstance(root, dict):
+        raise ValueError(f"{filename} must contain a YAML mapping.")
+    satellites = root.get("satellites")
+    if not isinstance(satellites, list):
+        raise ValueError(f"{filename} must contain a top-level 'satellites' list.")
+
+    choices = []
+    seen = set()
+    for item in satellites:
+        if not isinstance(item, dict):
+            continue
+        nickname = str(item.get("nickname") or "").strip()
+        if not nickname or nickname.casefold() in seen:
+            continue
+        seen.add(nickname.casefold())
+        choices.append({
+            "nickname": nickname,
+            "satellite_name": str(item.get("satellite_name") or nickname).strip(),
+            "satellite_type": str(item.get("satellite_type") or "").strip(),
+            "catalog_number": item.get("catalog_number"),
+        })
+    return choices
+
+
+def _normalize_catalog_number_for_custom_schedule(value):
+    """Normalize catalog numbers so values such as 07530 and 7530 compare equal."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        return text.lstrip("0") or "0"
+    return text.casefold()
+
+
+def schedule_custom_passes_from_web(nicknames, filename=SATELLITE_CONFIG_FILE):
+    """Validate selected nicknames, then schedule them with bqe_schedule_passes.py."""
+    if not isinstance(nicknames, (list, tuple)):
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "message": "Custom Schedule Passes requires a list of selected satellite nicknames.",
+        }
+
+    requested = []
+    seen_requested = set()
+    for value in nicknames:
+        nickname = str(value or "").strip()
+        key = nickname.casefold()
+        if nickname and key not in seen_requested:
+            seen_requested.add(key)
+            requested.append(nickname)
+
+    if not requested:
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "message": "Select at least one satellite before creating a custom schedule.",
+        }
+
+    if yaml is None:
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "message": "PyYAML is required to read satellites.yaml.",
+        }
+
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            root = yaml.safe_load(f) or {}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "message": f"Could not read {filename}: {exc}",
+        }
+
+    satellites = root.get("satellites", []) if isinstance(root, dict) else []
+    if not isinstance(satellites, list):
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "message": f"{filename} must contain a top-level 'satellites' list.",
+        }
+
+    entries = [item for item in satellites if isinstance(item, dict)]
+    by_nickname = {}
+    by_catalog = {}
+    for item in entries:
+        nickname = str(item.get("nickname") or "").strip()
+        if nickname:
+            by_nickname.setdefault(nickname.casefold(), item)
+
+        catalog_key = _normalize_catalog_number_for_custom_schedule(item.get("catalog_number"))
+        if catalog_key and nickname:
+            by_catalog.setdefault(catalog_key, []).append(nickname)
+
+    resolved_requested = []
+    missing = []
+    for nickname in requested:
+        item = by_nickname.get(nickname.casefold())
+        if item is None:
+            missing.append(nickname)
+        else:
+            resolved_requested.append((nickname, item))
+
+    if missing:
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "message": "Custom schedule cancelled. Nickname(s) not found in satellites.yaml: "
+                       + ", ".join(missing),
+        }
+
+    # Validate only the nicknames selected in THIS request.  Multiple aliases
+    # may legitimately exist in satellites.yaml, but a custom schedule may not
+    # contain two selected nicknames that resolve to the same catalog_number.
+    # This makes the validation retryable: the user can uncheck one conflicting
+    # alias and press Schedule again without closing the dialog.
+    selected_by_catalog = {}
+    missing_catalog_numbers = []
+
+    for requested_nickname, item in resolved_requested:
+        catalog_value = item.get("catalog_number")
+        catalog_key = _normalize_catalog_number_for_custom_schedule(catalog_value)
+        if not catalog_key:
+            missing_catalog_numbers.append(requested_nickname)
+            continue
+
+        group = selected_by_catalog.setdefault(
+            catalog_key,
+            {
+                "catalog_number": catalog_value,
+                "nicknames": [],
+            },
+        )
+        group["nicknames"].append(requested_nickname)
+
+    if missing_catalog_numbers:
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "retryable": True,
+            "validation_error": "missing_catalog_number",
+            "message": (
+                "Custom schedule not started. The following selected nickname(s) have no "
+                "catalog_number: " + ", ".join(repr(name) for name in missing_catalog_numbers)
+                + ". Change the selections and press Schedule again."
+            ),
+        }
+
+    conflicts = [
+        group
+        for group in selected_by_catalog.values()
+        if len(group["nicknames"]) > 1
+    ]
+
+    if conflicts:
+        conflict_text = "; ".join(
+            "catalog {catalog}: {names}".format(
+                catalog=group["catalog_number"],
+                names=", ".join(repr(name) for name in group["nicknames"]),
+            )
+            for group in conflicts
+        )
+        return {
+            "ok": False,
+            "action": "custom_schedule_passes",
+            "retryable": True,
+            "validation_error": "duplicate_catalog_number",
+            "message": (
+                "Custom schedule not started because two or more selected nicknames "
+                "refer to the same catalog_number: " + conflict_text
+                + ". Change the selections and press Schedule again."
+            ),
+        }
+
+    script_args = []
+    for requested_nickname, item in resolved_requested:
+        canonical_nickname = str(item.get("nickname") or requested_nickname).strip()
+        script_args.extend(["--nickname", canonical_nickname])
+
+    # Explicitly pass the same satellites.yaml file that was validated above.
+    script_args.extend(["--satellites_yaml", filename])
+
+    return _start_script_command(
+        "custom_schedule_passes",
+        "Custom Schedule Passes",
+        SCHEDULE_PASSES_SCRIPT,
+        script_args=script_args,
+        refresh_schedule_after=True,
+    )
+
+
+def _find_test_pass_satellite(nickname, filename=SATELLITE_CONFIG_FILE):
+    """Return one full satellites.yaml entry by nickname."""
+    wanted = str(nickname or "").strip().casefold()
+    if not wanted:
+        return None
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to read satellites.yaml.")
+    with open(filename, "r", encoding="utf-8") as f:
+        root = yaml.safe_load(f) or {}
+    satellites = root.get("satellites", []) if isinstance(root, dict) else []
+    if not isinstance(satellites, list):
+        return None
+    for item in satellites:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("nickname") or "").strip().casefold() == wanted:
+            return dict(item)
+    return None
+
+
+def _parse_frequency_range_mhz(value):
+    """Return an ordered two-frequency tuple from a YAML passband range."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        values = value
+    else:
+        values = re.findall(r"[0-9]+(?:\.[0-9]+)?", str(value or ""))
+        if len(values) != 2:
+            return None
+    try:
+        first, second = (float(values[0]), float(values[1]))
+    except (TypeError, ValueError):
+        return None
+    low_mhz, high_mhz = sorted((first, second))
+    if low_mhz <= 0 or high_mhz <= low_mhz:
+        return None
+    return low_mhz, high_mhz
+
+
+def load_fdt_passband(nickname, filename=SATELLITE_CONFIG_FILE):
+    """Load the active nickname's FDT passband limits and center frequencies."""
+    try:
+        satellite = _find_test_pass_satellite(nickname, filename)
+    except Exception as exc:
+        return {"error": f"Could not read FDT passband settings: {exc}"}
+    if satellite is None:
+        return {}
+
+    def band_payload(direction):
+        range_key = f"{direction}_frequency_range_mhz"
+        center_key = f"{direction}_frequency_mhz"
+        frequency_range = _parse_frequency_range_mhz(satellite.get(range_key))
+        try:
+            center_mhz = float(satellite.get(center_key))
+        except (TypeError, ValueError):
+            center_mhz = None
+        if frequency_range is None or center_mhz is None or center_mhz <= 0:
+            return None
+        low_mhz, high_mhz = frequency_range
+        return {
+            "low_mhz": low_mhz,
+            "high_mhz": high_mhz,
+            "center_mhz": center_mhz,
+            "range_text": str(satellite.get(range_key) or "").strip(),
+        }
+
+    return {
+        "nickname": str(satellite.get("nickname") or nickname).strip(),
+        "satellite_name": str(satellite.get("satellite_name") or nickname).strip(),
+        "satellite_type": str(satellite.get("satellite_type") or "").strip(),
+        "transponder_type": str(satellite.get("transponder_type") or "").strip(),
+        "downlink": band_payload("downlink"),
+        "uplink": band_payload("uplink"),
+    }
+
+
+def schedule_test_pass_from_web(nickname):
+    """Insert a ten-minute test pass beginning ten seconds from now."""
+    satellite = _find_test_pass_satellite(nickname)
+    if satellite is None:
+        return {
+            "ok": False,
+            "action": "run_test_pass",
+            "message": f"Satellite {nickname!r} was not found in {SATELLITE_CONFIG_FILE}.",
+        }
+
+    start = utc_now() + timedelta(seconds=10)
+    end = start + timedelta(minutes=10)
+    start_text = start.isoformat().replace("+00:00", "Z")
+    end_text = end.isoformat().replace("+00:00", "Z")
+
+    entry = {
+        "nickname": str(satellite.get("nickname") or nickname).strip(),
+        "satellite_name": str(satellite.get("satellite_name") or nickname).strip(),
+        "satellite_type": str(satellite.get("satellite_type") or "").strip(),
+        "start": start_text,
+        "end": end_text,
+        "max_elevation": TEST_PASS_ELEVATION,
+        "test_pass": True,
+    }
+
+    try:
+        try:
+            schedule = load_schedule(SCHEDULE_FILE)
+        except FileNotFoundError:
+            schedule = {"passes": []}
+        if not isinstance(schedule, dict):
+            schedule = {"passes": []}
+        passes = schedule.get("passes")
+        if not isinstance(passes, list):
+            passes = []
+            schedule["passes"] = passes
+        passes.append(entry)
+        passes.sort(key=lambda value: str(value.get("start") or ""))
+        _write_schedule_atomic(schedule, SCHEDULE_FILE)
+        refresh_schedule_state(SCHEDULE_FILE)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action": "run_test_pass",
+            "message": f"Could not insert test pass into {SCHEDULE_FILE}: {exc}",
+        }
+
+    message = (
+        f"Test pass for {entry['nickname']} scheduled for {start.strftime('%H:%M:%S')} UTC "
+        f"through {end.strftime('%H:%M:%S')} UTC."
+    )
+    with STATE_LOCK:
+        APP_STATE["last_message"] = message
+        APP_STATE["last_command"] = "run_test_pass"
+        APP_STATE["last_command_result"] = {
+            "ok": True,
+            "action": "run_test_pass",
+            "nickname": entry["nickname"],
+            "start": start_text,
+            "end": end_text,
+            "message": message,
+        }
+    print(f"[TEST PASS] {message}")
+    return dict(APP_STATE["last_command_result"])
+
+
+def _shorten_schedule_pass_end(current_key, new_end):
+    """Set the current schedule entry's end time to new_end and return its new key."""
+    if not current_key:
+        return None
+    try:
+        schedule = load_schedule(SCHEDULE_FILE)
+    except Exception:
+        return None
+    if not isinstance(schedule, dict):
+        return None
+    passes = schedule.get("passes", [])
+    if not isinstance(passes, list):
+        return None
+
+    new_end_text = new_end.isoformat().replace("+00:00", "Z")
+    updated_entry = None
+    for entry in passes:
+        if isinstance(entry, dict) and pass_key(entry) == current_key:
+            entry["end"] = new_end_text
+            entry["ended_early"] = True
+            updated_entry = entry
+            break
+
+    if updated_entry is None:
+        return None
+
+    _write_schedule_atomic(schedule, SCHEDULE_FILE)
+    refresh_schedule_state(SCHEDULE_FILE)
+    return pass_key(updated_entry)
+
+
+def end_current_pass_from_web():
+    """Request early termination of whichever pass is currently running."""
+    with STATE_LOCK:
+        tracking_running = bool(APP_STATE.get("tracking_running"))
+        current_key = APP_STATE.get("current_pass_key")
+        current_satellite = APP_STATE.get("current_satellite")
+
+    if not tracking_running or not current_key:
+        return {
+            "ok": False,
+            "action": "end_current_pass",
+            "message": "There is no current pass to end.",
+        }
+
+    now = utc_now()
+    new_key = _shorten_schedule_pass_end(current_key, now)
+    if new_key:
+        with STATE_LOCK:
+            APP_STATE["current_pass_key"] = new_key
+
+    # Mark the pass as ending before clearing FDT so a queued wheel request
+    # cannot recreate tuning data while the tracking process is stopping.
+    CURRENT_PASS_END_EVENT.set()
+    clear_fdt_control_state("End Current Pass requested")
+    message = f"Ending current pass for {current_satellite or 'satellite'} early."
+    with STATE_LOCK:
+        APP_STATE["last_message"] = message
+        APP_STATE["last_command"] = "end_current_pass"
+        APP_STATE["last_command_result"] = {
+            "ok": True,
+            "action": "end_current_pass",
+            "message": message,
+        }
+    print(f"[TRACKING] {message}")
+    return dict(APP_STATE["last_command_result"])
+
+
+def sleep_until_pass_end_or_timeout(total_seconds, step_seconds=0.25):
+    """Wait for normal LOS, application shutdown, or Tracking > End Current Pass."""
+    try:
+        total_seconds = float(total_seconds)
+    except (TypeError, ValueError):
+        total_seconds = 0.0
+
+    deadline = time.monotonic() + max(0.0, total_seconds)
+    while True:
+        if SHUTDOWN_EVENT.is_set():
+            return "shutdown"
+        if CURRENT_PASS_END_EVENT.is_set():
+            return "ended_early"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "timeout"
+        time.sleep(min(step_seconds, remaining))
+
+
 def wait_until(target_time):
     """Sleep until target UTC time, while allowing Ctrl+C or File > Exit to stop cleanly."""
     if SHUTDOWN_EVENT.is_set():
@@ -404,16 +936,31 @@ def wait_until(target_time):
     return not SHUTDOWN_EVENT.is_set()
 
 
-def safe_subprocess_cmd(sat_name, status_file=STATUS_FILE, rigctld_pid_file=RIGCTLD_PID_FILE, pass_program_pid_file=PASS_PROGRAM_PID_FILE):
+def safe_subprocess_cmd(
+    sat_name,
+    status_file=STATUS_FILE,
+    rigctld_pid_file=RIGCTLD_PID_FILE,
+    pass_program_pid_file=PASS_PROGRAM_PID_FILE,
+    antenna_tracking_override_file=ANTENNA_TRACKING_OVERRIDE_FILE,
+    fdt_control_file=FDT_CONTROL_FILE,
+    stop_file=TRACKING_STOP_FILE,
+    test_pass=False,
+):
     """Use the current Python executable when launching the tracking script."""
-    return [
+    command = [
         PYTHON_PATH,
-        TRACKING_SCRIPT,
+        TRACKING_SCRIPT,  # MARKER - Code this better relies on fallback to find satellites.yaml in bqe_config, rather than TLD.
         sat_name,
         "--status_file", status_file,
         "--rigctld_pid_file", rigctld_pid_file,
         "--pass_program_pid_file", pass_program_pid_file,
+        "--antenna_tracking_override_file", antenna_tracking_override_file,
+        "--fdt_control_file", fdt_control_file,
+        "--stop_file", stop_file,
     ]
+    if test_pass:
+        command.append("--test_pass")
+    return command
 
 
 def terminate_rigctld_from_pid_file(pid_file=RIGCTLD_PID_FILE):
@@ -510,6 +1057,56 @@ def terminate_process_from_pid_file(pid_file, process_name="process"):
             pass
 
 
+def request_tracking_process_stop(process, stop_file=TRACKING_STOP_FILE, timeout=15):
+    """Ask the tracker to clean up its pass helper, then use force as fallback.
+
+    The request-file handshake is intentionally cross-platform.  It lets the
+    tracker tell bqe_sound_recorder.py to flush and close its MP3 before either
+    process exits, including on Windows where Popen.terminate() is uncatchable.
+    """
+    if process is None:
+        return
+
+    try:
+        if process.poll() is not None:
+            return
+    except Exception:
+        return
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(stop_file)), exist_ok=True)
+        temporary_file = "{}.{}.{}.tmp".format(
+            stop_file, os.getpid(), threading.get_ident()
+        )
+        with open(temporary_file, "w", encoding="utf-8") as f:
+            f.write("stop\n")
+        os.replace(temporary_file, stop_file)
+        print("[INFO] Requested orderly tracking/pass-program shutdown...")
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print("[WARNING] Tracker did not exit after the clean-stop timeout; terminating it...")
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            print("[WARNING] Tracker still did not exit; force killing it...")
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+    except Exception as e:
+        print(f"Warning: unable to request orderly tracking shutdown: {e}")
+        terminate_popen_process(process, "tracking process")
+    finally:
+        try:
+            os.remove(stop_file)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f"Warning: could not remove tracking stop request {stop_file}: {e}")
+
+
 def run_pass(pass_entry, start, end):
     """Run tracking subprocess for a satellite and terminate it at end time."""
     global CURRENT_TRACKING_PROCESS
@@ -517,8 +1114,16 @@ def run_pass(pass_entry, start, end):
     if SHUTDOWN_EVENT.is_set():
         return
 
+    CURRENT_PASS_END_EVENT.clear()
     sat_name = pass_entry["_satellite"]
     os.makedirs(LOG_DIR, exist_ok=True)
+
+    # Always begin from the configured transponder midpoint.  Clear any stale
+    # control file before the new pass is exposed as active to the web UI.
+    clear_fdt_control_state("starting a new pass")
+    with STATE_LOCK:
+        APP_STATE["fdt_recalculation_interval"] = FDT_RECALCULATION_INTERVAL
+        APP_STATE["fdt_recalculation_interval_override"] = None
 
     timestamp = start.strftime("%Y%m%dT%H%M%SZ")
     safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in sat_name)
@@ -544,10 +1149,20 @@ def run_pass(pass_entry, start, end):
             os.remove(STATUS_FILE)
     except OSError:
         pass
-
+    try:
+        if os.path.exists(TRACKING_STOP_FILE):
+            os.remove(TRACKING_STOP_FILE)
+    except OSError as e:
+        print(f"Warning: could not clear stale tracking stop request: {e}")
     with open(log_filename, "w", encoding="utf-8") as log_file:
         process = subprocess.Popen(
-            safe_subprocess_cmd(sat_name, STATUS_FILE, RIGCTLD_PID_FILE, PASS_PROGRAM_PID_FILE),
+            safe_subprocess_cmd(
+                sat_name,
+                STATUS_FILE,
+                RIGCTLD_PID_FILE,
+                PASS_PROGRAM_PID_FILE,
+                test_pass=bool(pass_entry.get("test_pass")),
+            ),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
@@ -557,26 +1172,42 @@ def run_pass(pass_entry, start, end):
         duration = (end - utc_now()).total_seconds()
         if duration <= 0:
             print(f"⚠️ End time {end.isoformat()} already passed; skipping.")
+            CURRENT_PASS_END_EVENT.set()
+            clear_fdt_control_state("pass end time already elapsed")
             if process.poll() is None:
-                process.terminate()
+                request_tracking_process_stop(process)
             CURRENT_TRACKING_PROCESS = None
             terminate_rigctld_from_pid_file(RIGCTLD_PID_FILE)
             terminate_process_from_pid_file(PASS_PROGRAM_PID_FILE, "pass program")
             terminate_process_from_pid_file(LEGACY_PASS_PROGRAM_PID_FILE, "pass program")
+            try:
+                if os.path.exists(STATUS_FILE):
+                    os.remove(STATUS_FILE)
+            except OSError:
+                pass
+            with STATE_LOCK:
+                APP_STATE["tracking_running"] = False
+                APP_STATE["fdt_recalculation_interval"] = FDT_RECALCULATION_INTERVAL
+                APP_STATE["fdt_recalculation_interval_override"] = None
+                APP_STATE["completed"].append(pass_entry["_key"])
+                APP_STATE["last_message"] = f"Skipped expired pass for {sat_name}."
+                APP_STATE["current_pass_key"] = None
+                APP_STATE["current_satellite"] = None
             return
 
         try:
-            if not sleep_until_shutdown_or_timeout(duration):
+            wait_result = sleep_until_pass_end_or_timeout(duration)
+            if wait_result == "shutdown":
                 print("[INFO] Exit requested. Stopping active tracking pass early.")
+            elif wait_result == "ended_early":
+                print(f"[INFO] End Current Pass requested. Stopping {sat_name} early.")
         finally:
-            print(f"[INFO] Stopping {sat_name} at {end.isoformat()} ...")
+            stop_time = utc_now()
+            print(f"[INFO] Stopping {sat_name} at {stop_time.isoformat()} ...")
+            CURRENT_PASS_END_EVENT.set()
+            clear_fdt_control_state("satellite pass ended")
             if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    print("[WARNING] Process did not exit cleanly — force killing...")
-                    process.kill()
+                request_tracking_process_stop(process)
 
             CURRENT_TRACKING_PROCESS = None
             terminate_rigctld_from_pid_file(RIGCTLD_PID_FILE)
@@ -585,6 +1216,8 @@ def run_pass(pass_entry, start, end):
 
     with STATE_LOCK:
         APP_STATE["tracking_running"] = False
+        APP_STATE["fdt_recalculation_interval"] = FDT_RECALCULATION_INTERVAL
+        APP_STATE["fdt_recalculation_interval_override"] = None
         APP_STATE["completed"].append(pass_entry["_key"])
         APP_STATE["last_message"] = f"Completed {sat_name}; log saved to {log_filename}"
         APP_STATE["current_pass_key"] = None
@@ -1081,7 +1714,7 @@ def cleanup_helper_programs():
     terminate_popen_process(CURRENT_WEB_COMMAND_PROCESS, "web command process")
     CURRENT_WEB_COMMAND_PROCESS = None
 
-    terminate_popen_process(CURRENT_TRACKING_PROCESS, "tracking process")
+    request_tracking_process_stop(CURRENT_TRACKING_PROCESS)
     CURRENT_TRACKING_PROCESS = None
 
     stop_idle_wait_program(CURRENT_IDLE_PROCESS)
@@ -1091,6 +1724,7 @@ def cleanup_helper_programs():
     terminate_process_from_pid_file(PASS_PROGRAM_PID_FILE, "pass program")
     terminate_process_from_pid_file(LEGACY_PASS_PROGRAM_PID_FILE, "pass program")
     terminate_process_from_pid_file(IDLE_WAIT_PROGRAM_PID_FILE, "idle wait program")
+    clear_fdt_control_state("application/helper cleanup")
 
     try:
         if os.path.exists(STATUS_FILE):
@@ -1859,6 +2493,48 @@ def augment_tracking_status_for_map(tracking_status, observer_location=None):
     return status
 
 
+def write_antenna_tracking_override(enabled):
+    """Atomically publish a temporary antenna-tracking override for the active tracker."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    payload = {
+        "enable_antenna_tracking": bool(enabled),
+        "timestamp_utc": utc_now().isoformat(),
+    }
+    tmp_name = ANTENNA_TRACKING_OVERRIDE_FILE + ".tmp"
+    with open(tmp_name, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    os.replace(tmp_name, ANTENNA_TRACKING_OVERRIDE_FILE)
+
+
+def clear_antenna_tracking_override():
+    """Remove the temporary override so satellite YAML controls tracking again."""
+    try:
+        if os.path.exists(ANTENNA_TRACKING_OVERRIDE_FILE):
+            os.remove(ANTENNA_TRACKING_OVERRIDE_FILE)
+    except OSError as e:
+        print(f"Warning: could not remove antenna tracking override file: {e}")
+
+
+def set_antenna_tracking_override(enabled):
+    """Set a temporary runtime override and make it visible to the web console."""
+    enabled = bool(enabled)
+    write_antenna_tracking_override(enabled)
+    with STATE_LOCK:
+        APP_STATE["antenna_tracking_override"] = enabled
+        message = (
+            "Antenna tracking temporarily enabled from Tracking menu."
+            if enabled
+            else "Antenna tracking temporarily disabled from Tracking menu."
+        )
+        APP_STATE["last_message"] = message
+    return {
+        "ok": True,
+        "antenna_tracking_override": enabled,
+        "antenna_tracking_disabled": not enabled,
+        "message": message,
+    }
+
+
 def _set_status_message(message, command_running=None, last_command=None, last_command_result=None):
     """Update the web-console status message and optional command state."""
     with STATE_LOCK:
@@ -1916,7 +2592,7 @@ def _start_script_command(action, display_name, script_path, script_args=None, r
         ok = False
         output = ""
         return_code = None
-        print("WEB COMMAND - Starting")
+        print(f"WEB COMMAND - Starting {started.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         try:
             process = subprocess.Popen(
                 [PYTHON_PATH, script_path, *script_args],
@@ -1978,7 +2654,7 @@ def _start_script_command(action, display_name, script_path, script_args=None, r
             last_command=action,
             last_command_result=result,
         )
-        print(f"[WEB COMMAND] {message}")
+        print(f"[WEB COMMAND] {message} {finished.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
     thread = threading.Thread(target=worker, name=f"BQEWebCommand-{action}", daemon=True)
     thread.start()
@@ -1992,6 +2668,53 @@ def handle_web_command(action, request_payload=None):
 
     if action == "program_preset":
         return program_preset_from_web(request_payload.get("nickname"))
+
+    if action == "get_test_pass_satellites":
+        try:
+            satellites = load_test_pass_satellites()
+            return {
+                "ok": True,
+                "action": action,
+                "satellites": satellites,
+                "message": f"Loaded {len(satellites)} satellites from {SATELLITE_CONFIG_FILE}.",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "action": action,
+                "satellites": [],
+                "message": f"Could not load test-pass satellites: {exc}",
+            }
+
+    if action == "run_test_pass":
+        return schedule_test_pass_from_web(request_payload.get("nickname"))
+
+    if action == "custom_schedule_passes":
+        return schedule_custom_passes_from_web(request_payload.get("nicknames"))
+
+    if action == "end_current_pass":
+        return end_current_pass_from_web()
+
+    if action == "enable_fdt":
+        return enable_fdt_from_web(
+            request_payload.get("receive_frequency_mhz"),
+            request_payload.get("uplink_frequency_mhz"),
+            request_payload.get("fdt_recalculation_interval"),
+        )
+
+    if action == "disable_fdt":
+        return disable_fdt_from_web()
+
+    if action == "tune_fdt_step":
+        return tune_fdt_step_from_web(request_payload.get("downlink_direction"))
+
+    if action == "set_fdt_recalculation_interval":
+        return set_fdt_recalculation_interval_from_web(
+            request_payload.get("fdt_recalculation_interval")
+        )
+
+    if action == "reset_fdt_recalculation_interval":
+        return reset_fdt_recalculation_interval_from_web()
 
     if action in {"exit", "exit_app", "quit"}:
         return request_shutdown("Exit requested from File > Exit. Cleaning up helper programs...")
@@ -2012,8 +2735,713 @@ def handle_web_command(action, request_payload=None):
             refresh_schedule_after=True,
         )
 
+    if action == "disable_antenna_tracking":
+        return set_antenna_tracking_override(False)
+
+    if action == "enable_antenna_tracking":
+        return set_antenna_tracking_override(True)
+
     message = f"Unknown command: {action or '(blank)'}"
     return {"ok": False, "action": action, "message": message}
+
+
+def _write_fdt_control_payload(payload, filename=FDT_CONTROL_FILE):
+    """Atomically publish FDT satellite/live frequencies for the tracking process."""
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    temporary_file = f"{filename}.{threading.get_ident()}.tmp"
+    with FDT_TUNING_LOCK:
+        if CURRENT_PASS_END_EVENT.is_set() or SHUTDOWN_EVENT.is_set():
+            raise RuntimeError("the active pass is ending; FDT data was not saved")
+        try:
+            with open(temporary_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(temporary_file, filename)
+        finally:
+            try:
+                if os.path.exists(temporary_file):
+                    os.remove(temporary_file)
+            except OSError:
+                pass
+
+
+def clear_fdt_control_state(reason=None, filename=FDT_CONTROL_FILE):
+    """Remove current and temporary FDT data without racing a wheel update."""
+    removed_any = False
+    with FDT_TUNING_LOCK:
+        candidates = [filename, filename + ".tmp"]
+        candidates.extend(glob.glob(filename + ".*.tmp"))
+        for candidate in dict.fromkeys(candidates):
+            try:
+                if os.path.exists(candidate):
+                    os.remove(candidate)
+                    removed_any = True
+            except OSError as exc:
+                print(f"[WARNING] Could not remove FDT data file {candidate}: {exc}")
+
+    with STATE_LOCK:
+        if APP_STATE.get("last_command") in {"enable_fdt", "disable_fdt", "tune_fdt_step"}:
+            APP_STATE["last_command"] = None
+            APP_STATE["last_command_result"] = None
+
+    if removed_any:
+        suffix = f" ({reason})" if reason else ""
+        print(f"[INFO] Cleared FDT control data{suffix}.")
+    return removed_any
+
+
+def _raise_for_rigctld_error(response, description):
+    """Raise when a rigctld setter reports a non-zero RPRT result."""
+    if response is None:
+        # Older bqe_hamlib_interface versions did not return the response.
+        return
+    response_text = str(response).strip()
+    result_codes = re.findall(r"RPRT\s+(-?\d+)", response_text, flags=re.IGNORECASE)
+    failing_codes = [code for code in result_codes if int(code) != 0]
+    if failing_codes:
+        raise RuntimeError(
+            f"rigctld rejected the {description} command "
+            f"(RPRT {failing_codes[-1]})"
+        )
+
+
+def _fdt_status_enabled(fdt_status):
+    """Return whether a valid FDT control payload enables live tracking."""
+    if not isinstance(fdt_status, dict) or not fdt_status:
+        return False
+    # Payloads written by older versions did not contain an explicit flag;
+    # their presence meant that FDT was enabled.
+    return fdt_status.get("enabled", True) is True
+
+
+def get_fdt_recalculation_interval():
+    """Return the slider value; it is not necessarily an active override."""
+    with STATE_LOCK:
+        return float(
+            APP_STATE.get("fdt_recalculation_interval", FDT_RECALCULATION_INTERVAL)
+        )
+
+
+def get_fdt_recalculation_interval_override():
+    """Return the active fixed FDT cadence override, or None for YAML auto mode."""
+    with STATE_LOCK:
+        value = APP_STATE.get("fdt_recalculation_interval_override")
+    return None if value is None else float(value)
+
+
+def set_fdt_recalculation_interval_from_web(requested_interval):
+    """Apply the FDT Console interval slider value for the current session."""
+    action = "set_fdt_recalculation_interval"
+    try:
+        interval = float(requested_interval)
+    except (TypeError, ValueError):
+        interval = float("nan")
+
+    if (
+            not math.isfinite(interval)
+            or interval < FDT_RECALCULATION_INTERVAL_MIN
+            or interval > FDT_RECALCULATION_INTERVAL_MAX):
+        return {
+            "ok": False,
+            "action": action,
+            "message": (
+                "FDT recalculation interval must be between "
+                f"{FDT_RECALCULATION_INTERVAL_MIN:g} and "
+                f"{FDT_RECALCULATION_INTERVAL_MAX:g} seconds."
+            ),
+        }
+
+    status = read_tracking_status()
+    with STATE_LOCK:
+        tracking_running = bool(APP_STATE.get("tracking_running"))
+        current_key = APP_STATE.get("current_pass_key")
+        active_pass = next(
+            (p for p in APP_STATE.get("passes", []) if p.get("_key") == current_key),
+            {},
+        )
+    satellite_type = status.get("satellite_type") or active_pass.get("satellite_type") or ""
+    if not tracking_running or str(satellite_type).strip().upper() != "LINEAR":
+        return {
+            "ok": False,
+            "action": action,
+            "message": "The FDT interval can be adjusted only during an active LINEAR satellite pass.",
+        }
+
+    with STATE_LOCK:
+        APP_STATE["fdt_recalculation_interval"] = interval
+        APP_STATE["fdt_recalculation_interval_override"] = interval
+
+    # If FDT is already running, republish its payload so the tracker adopts
+    # the fixed override immediately. When FDT is paused, the selected value
+    # is retained and included by the next Sync FDT command.
+    with FDT_TUNING_LOCK:
+        current_fdt = read_fdt_console_status()
+        if _fdt_status_enabled(current_fdt):
+            current_fdt["timestamp_utc"] = utc_now().isoformat()
+            current_fdt["cadence_mode"] = "override"
+            current_fdt["fdt_recalculation_interval_override"] = interval
+            current_fdt["fdt_recalculation_interval"] = interval
+            _write_fdt_control_payload(current_fdt)
+
+    message = f"FDT cadence override set to {interval:g} seconds."
+    _set_status_message(message, last_command=action)
+    return {
+        "ok": True,
+        "action": action,
+        "message": message,
+        "fdt_recalculation_interval": interval,
+        "fdt_recalculation_interval_override": interval,
+        "fdt_cadence_mode": "override",
+    }
+
+
+def reset_fdt_recalculation_interval_from_web():
+    """Return FDT to the same automatic YAML cadence used by all satellites."""
+    action = "reset_fdt_recalculation_interval"
+    with STATE_LOCK:
+        APP_STATE["fdt_recalculation_interval"] = FDT_RECALCULATION_INTERVAL
+        APP_STATE["fdt_recalculation_interval_override"] = None
+
+    with FDT_TUNING_LOCK:
+        current_fdt = read_fdt_console_status()
+        if _fdt_status_enabled(current_fdt):
+            current_fdt["timestamp_utc"] = utc_now().isoformat()
+            current_fdt["cadence_mode"] = "auto"
+            current_fdt["fdt_recalculation_interval_override"] = None
+            current_fdt.pop("fdt_recalculation_interval", None)
+            _write_fdt_control_payload(current_fdt)
+
+    message = (
+        "FDT cadence returned to YAML automatic mode: "
+        f"{TRACKING_SLEEP_INTERVAL_SECONDS:g} seconds normally and "
+        f"{TRACKING_SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS:g} seconds above "
+        f"{TRACKING_HIGH_PASS_ELEVATION:g} degrees elevation."
+    )
+    _set_status_message(message, last_command=action)
+    return {
+        "ok": True,
+        "action": action,
+        "message": message,
+        "fdt_recalculation_interval": FDT_RECALCULATION_INTERVAL,
+        "fdt_recalculation_interval_override": None,
+        "fdt_cadence_mode": "auto",
+    }
+
+
+def tune_fdt_step_from_web(downlink_direction):
+    """Move a LINEAR transponder pair by one 200 Hz mouse-wheel step."""
+    action = "tune_fdt_step"
+    try:
+        direction_value = float(downlink_direction)
+    except (TypeError, ValueError):
+        direction_value = 0.0
+    if not math.isfinite(direction_value) or direction_value == 0:
+        return {
+            "ok": False,
+            "action": action,
+            "message": "FDT wheel tuning requires an up or down direction.",
+        }
+    downlink_delta_hz = FDT_WHEEL_STEP_HZ if direction_value > 0 else -FDT_WHEEL_STEP_HZ
+
+    with STATE_LOCK:
+        tracking_running = bool(APP_STATE.get("tracking_running"))
+        current_nickname = str(APP_STATE.get("current_satellite") or "").strip()
+        current_key = APP_STATE.get("current_pass_key")
+        active_pass = next(
+            (p for p in APP_STATE.get("passes", []) if p.get("_key") == current_key),
+            {},
+        )
+
+    status = read_tracking_status()
+    satellite_type = str(
+        status.get("satellite_type") or active_pass.get("satellite_type") or ""
+    ).strip().upper()
+    if (
+            not tracking_running
+            or satellite_type != "LINEAR"
+            or not current_nickname
+            or CURRENT_PASS_END_EVENT.is_set()
+            or SHUTDOWN_EVENT.is_set()):
+        return {
+            "ok": False,
+            "action": action,
+            "message": "FDT wheel tuning is available only during an active LINEAR satellite pass.",
+        }
+
+    passband = load_fdt_passband(current_nickname)
+    if passband.get("error"):
+        return {"ok": False, "action": action, "message": passband["error"]}
+    downlink_band = passband.get("downlink")
+    uplink_band = passband.get("uplink")
+    if not isinstance(downlink_band, dict) or not isinstance(uplink_band, dict):
+        return {
+            "ok": False,
+            "action": action,
+            "message": (
+                "FDT wheel tuning requires valid uplink_frequency_range_mhz and "
+                "downlink_frequency_range_mhz values in satellites.yaml."
+            ),
+        }
+
+    transponder_type = str(passband.get("transponder_type") or "").strip()
+    normalized_transponder_type = re.sub(r"[^A-Z]", "", transponder_type.upper())
+    if normalized_transponder_type.startswith("NON"):
+        uplink_delta_hz = downlink_delta_hz
+    elif normalized_transponder_type == "INVERTING":
+        uplink_delta_hz = -downlink_delta_hz
+    else:
+        return {
+            "ok": False,
+            "action": action,
+            "message": (
+                "FDT wheel tuning requires transponder_type to be INVERTING or "
+                "NON-INVERTING in satellites.yaml."
+            ),
+        }
+
+    try:
+        with FDT_TUNING_LOCK:
+            current_fdt = read_fdt_console_status()
+            if not _fdt_status_enabled(current_fdt):
+                raise RuntimeError("FDT is disabled; press Enable FDT before wheel tuning")
+
+            def finite_frequency_hz(value):
+                try:
+                    result = float(value)
+                except (TypeError, ValueError):
+                    return None
+                return result if math.isfinite(result) and result > 0 else None
+
+            current_downlink_at_sat_hz = finite_frequency_hz(
+                current_fdt.get("downlink_frequency_hz")
+            )
+            if current_downlink_at_sat_hz is None:
+                status_downlink_mhz = finite_frequency_hz(status.get("downlink_frequency_mhz"))
+                current_downlink_at_sat_hz = (
+                    status_downlink_mhz * 1e6
+                    if status_downlink_mhz is not None
+                    else float(downlink_band["center_mhz"]) * 1e6
+                )
+
+            current_uplink_at_sat_hz = finite_frequency_hz(
+                current_fdt.get("uplink_frequency_hz")
+            )
+            if current_uplink_at_sat_hz is None:
+                status_uplink_mhz = finite_frequency_hz(status.get("uplink_frequency_mhz"))
+                current_uplink_at_sat_hz = (
+                    status_uplink_mhz * 1e6
+                    if status_uplink_mhz is not None
+                    else float(uplink_band["center_mhz"]) * 1e6
+                )
+
+            tracker_downlink_at_sat_hz = finite_frequency_hz(
+                status.get("downlink_frequency_mhz")
+            )
+            try:
+                tracker_downlink_doppler_hz = float(status.get("downlink_doppler_hz"))
+            except (TypeError, ValueError):
+                tracker_downlink_doppler_hz = float("nan")
+            if tracker_downlink_at_sat_hz is None or not math.isfinite(tracker_downlink_doppler_hz):
+                raise RuntimeError("waiting for the tracker to report current Doppler data")
+            tracker_downlink_at_sat_hz *= 1e6
+            doppler_ratio = tracker_downlink_doppler_hz / tracker_downlink_at_sat_hz
+
+            new_downlink_at_sat_hz = current_downlink_at_sat_hz + downlink_delta_hz
+            new_uplink_at_sat_hz = current_uplink_at_sat_hz + uplink_delta_hz
+            downlink_low_hz = float(downlink_band["low_mhz"]) * 1e6
+            downlink_high_hz = float(downlink_band["high_mhz"]) * 1e6
+            uplink_low_hz = float(uplink_band["low_mhz"]) * 1e6
+            uplink_high_hz = float(uplink_band["high_mhz"]) * 1e6
+
+            if not downlink_low_hz <= new_downlink_at_sat_hz <= downlink_high_hz:
+                raise ValueError(
+                    "downlink passband edge reached; the radio was not retuned"
+                )
+            if not uplink_low_hz <= new_uplink_at_sat_hz <= uplink_high_hz:
+                raise ValueError(
+                    "uplink passband edge reached; the radio was not retuned"
+                )
+
+            downlink_doppler_at_sat_hz = new_downlink_at_sat_hz * doppler_ratio
+            # Uplink Doppler correction must always have the opposite sign from
+            # the downlink correction.  Its magnitude is scaled for the uplink
+            # frequency, but its sign is explicitly inverted here.
+            uplink_doppler_at_sat_hz = -new_uplink_at_sat_hz * doppler_ratio
+            radio_receive_hz = int(round(new_downlink_at_sat_hz + downlink_doppler_at_sat_hz))
+            radio_uplink_hz = int(round(new_uplink_at_sat_hz + uplink_doppler_at_sat_hz))
+            previous_radio_receive_hz = int(round(
+                current_downlink_at_sat_hz * (1.0 + doppler_ratio)
+            ))
+
+            if rig is None:
+                raise RuntimeError("Hamlib radio control is unavailable")
+
+            downlink_programmed = False
+            try:
+                response = rig.rigctld_set_downlink_frequency(
+                    radio_receive_hz, RIGCTLD_PORT
+                )
+                _raise_for_rigctld_error(response, "downlink frequency")
+                downlink_programmed = True
+                response = rig.rigctld_set_uplink_frequency(
+                    radio_uplink_hz, RIGCTLD_PORT
+                )
+                _raise_for_rigctld_error(response, "uplink frequency")
+            except Exception:
+                if downlink_programmed:
+                    try:
+                        rig.rigctld_set_downlink_frequency(
+                            previous_radio_receive_hz, RIGCTLD_PORT
+                        )
+                    except Exception as rollback_exc:
+                        print(f"[WARNING] Could not restore downlink after FDT failure: {rollback_exc}")
+                raise
+
+            payload = {
+                "timestamp_utc": utc_now().isoformat(),
+                "enabled": True,
+                "cadence_mode": (
+                    "override" if get_fdt_recalculation_interval_override() is not None else "auto"
+                ),
+                "fdt_recalculation_interval_override": get_fdt_recalculation_interval_override(),
+                "downlink_frequency_hz": new_downlink_at_sat_hz,
+                "radio_receive_frequency_hz": radio_receive_hz,
+                "doppler_at_receive_frequency_hz": downlink_doppler_at_sat_hz,
+                "frequency_source": "fdt_mouse_wheel",
+                "uplink_frequency_hz": new_uplink_at_sat_hz,
+                "radio_uplink_frequency_hz": radio_uplink_hz,
+                "doppler_at_radio_uplink_frequency_hz": uplink_doppler_at_sat_hz,
+                "uplink_frequency_source": "fdt_mouse_wheel",
+                "transponder_type": transponder_type,
+                "downlink_step_hz": downlink_delta_hz,
+                "uplink_step_hz": uplink_delta_hz,
+            }
+            _write_fdt_control_payload(payload)
+
+        down_word = "up" if downlink_delta_hz > 0 else "down"
+        up_word = "up" if uplink_delta_hz > 0 else "down"
+        message = (
+            f"FDT tuned downlink {down_word} 200 Hz to {radio_receive_hz / 1e6:.6f} MHz "
+            f"and uplink {up_word} 200 Hz to {radio_uplink_hz / 1e6:.6f} MHz "
+            f"({transponder_type})."
+        )
+        _set_status_message(message, last_command=action)
+        return {"ok": True, "action": action, "message": message, **payload}
+    except Exception as exc:
+        message = f"Could not tune FDT: {exc}"
+        _set_status_message(message, last_command=action)
+        return {"ok": False, "action": action, "message": message}
+
+def enable_fdt_from_web(
+        manual_receive_frequency_mhz=None,
+        manual_uplink_frequency_mhz=None,
+        requested_recalculation_interval=None):
+    """Anchor FDT to the radio's tuning and begin continuous LINEAR correction."""
+    status = read_tracking_status()
+    with STATE_LOCK:
+        tracking_running = bool(APP_STATE.get("tracking_running"))
+        current_key = APP_STATE.get("current_pass_key")
+        active_pass = next(
+            (p for p in APP_STATE.get("passes", []) if p.get("_key") == current_key),
+            {},
+        )
+    satellite_type = status.get("satellite_type") or active_pass.get("satellite_type") or ""
+    if (
+            not tracking_running
+            or str(satellite_type).strip().upper() != "LINEAR"
+            or CURRENT_PASS_END_EVENT.is_set()
+            or SHUTDOWN_EVENT.is_set()):
+        return {
+            "ok": False,
+            "action": "enable_fdt",
+            "message": "Enable FDT is available only during an active LINEAR satellite pass.",
+        }
+    if requested_recalculation_interval is not None:
+        interval_result = set_fdt_recalculation_interval_from_web(
+            requested_recalculation_interval
+        )
+        if not interval_result.get("ok"):
+            return {
+                "ok": False,
+                "action": "enable_fdt",
+                "message": interval_result.get(
+                    "message", "Could not set the FDT recalculation interval."
+                ),
+            }
+    try:
+        receive_hz = None
+        radio_error = None
+        if rig is not None:
+            try:
+                receive_hz = float(rig.rigctld_get_downlink_frequency(RIGCTLD_PORT))
+            except Exception as exc:
+                radio_error = exc
+        else:
+            radio_error = RuntimeError("Hamlib radio control is unavailable")
+
+        if receive_hz is None:
+            if not bool(status.get("test_pass")):
+                raise RuntimeError(f"could not query the radio: {radio_error}")
+            if manual_receive_frequency_mhz is None or str(manual_receive_frequency_mhz).strip() == "":
+                raise ValueError(
+                    "Radio frequency could not be queried during this test pass. "
+                    "Enter the receive frequency in the FDT Console."
+                )
+            receive_hz = float(manual_receive_frequency_mhz) * 1e6
+            if receive_hz <= 0:
+                raise ValueError("the entered receive frequency must be greater than zero")
+        tracker_downlink_at_sat_hz = float(status.get("downlink_frequency_mhz")) * 1e6
+        tracker_downlink_doppler_hz = float(status.get("downlink_doppler_hz"))
+        if tracker_downlink_at_sat_hz <= 0:
+            raise ValueError("tracker reported an invalid downlink frequency at the satellite")
+
+        # The tracker reports Doppler at its downlink frequency at the
+        # satellite.  Recover the dimensionless Doppler ratio, then solve for
+        # the operator-selected frequency at the satellite.  Do not calculate
+        # Doppler from the frequency displayed on the radio.
+        doppler_ratio = tracker_downlink_doppler_hz / tracker_downlink_at_sat_hz
+        downlink_radio_multiplier = 1.0 + doppler_ratio
+        if downlink_radio_multiplier <= 0:
+            raise ValueError("tracker reported an invalid downlink Doppler ratio")
+        downlink_at_sat_hz = receive_hz / downlink_radio_multiplier
+        downlink_doppler_at_sat_hz = downlink_at_sat_hz * doppler_ratio
+
+        configured_uplink_mhz = float(status.get("uplink_frequency_mhz") or 0)
+        uplink_hz = None
+        uplink_at_sat_hz = None
+        uplink_doppler_at_sat_hz = None
+        uplink_source = None
+        if configured_uplink_mhz > 0:
+            uplink_radio_error = None
+            if rig is not None:
+                try:
+                    uplink_hz = float(rig.rigctld_get_uplink_frequency(RIGCTLD_PORT))
+                except Exception as exc:
+                    uplink_radio_error = exc
+            else:
+                uplink_radio_error = RuntimeError("Hamlib radio control is unavailable")
+
+            if uplink_hz is None:
+                if not bool(status.get("test_pass")):
+                    raise RuntimeError(f"could not query the radio uplink frequency: {uplink_radio_error}")
+                if manual_uplink_frequency_mhz is None or str(manual_uplink_frequency_mhz).strip() == "":
+                    raise ValueError(
+                        "Radio uplink frequency could not be queried during this test pass. "
+                        "Enter the uplink frequency in the FDT Console."
+                    )
+                uplink_hz = float(manual_uplink_frequency_mhz) * 1e6
+                if uplink_hz <= 0:
+                    raise ValueError("the entered uplink frequency must be greater than zero")
+
+            # Uplink Doppler has the opposite sign.  The radio transmits at
+            # uplink_at_sat_hz * (1 - doppler_ratio), so solve that equation
+            # before calculating the signed Doppler shift at the satellite.
+            uplink_radio_multiplier = 1.0 - doppler_ratio
+            if uplink_radio_multiplier <= 0:
+                raise ValueError("tracker reported an invalid uplink Doppler ratio")
+            uplink_at_sat_hz = uplink_hz / uplink_radio_multiplier
+            uplink_doppler_at_sat_hz = -uplink_at_sat_hz * doppler_ratio
+            uplink_source = "radio" if uplink_radio_error is None else "manual_test_pass_entry"
+
+        # Program the newly calculated Doppler-corrected radio frequencies now.
+        # The tracking process will repeat this calculation with fresh Doppler
+        # data on every loop while the control payload remains enabled.
+        radio_receive_target_hz = int(round(
+            downlink_at_sat_hz + downlink_doppler_at_sat_hz
+        ))
+        radio_uplink_target_hz = None
+        if uplink_at_sat_hz is not None:
+            radio_uplink_target_hz = int(round(
+                uplink_at_sat_hz + uplink_doppler_at_sat_hz
+            ))
+
+        if rig is None:
+            raise RuntimeError("Hamlib radio control is unavailable")
+
+        payload = {
+            "timestamp_utc": utc_now().isoformat(),
+            "enabled": True,
+            "cadence_mode": (
+                "override" if get_fdt_recalculation_interval_override() is not None else "auto"
+            ),
+            "fdt_recalculation_interval_override": get_fdt_recalculation_interval_override(),
+            "downlink_frequency_hz": downlink_at_sat_hz,
+            "radio_receive_frequency_hz": radio_receive_target_hz,
+            "doppler_at_receive_frequency_hz": downlink_doppler_at_sat_hz,
+            "frequency_source": "radio" if radio_error is None else "manual_test_pass_entry",
+            "uplink_frequency_hz": uplink_at_sat_hz,
+            "radio_uplink_frequency_hz": radio_uplink_target_hz,
+            "doppler_at_radio_uplink_frequency_hz": uplink_doppler_at_sat_hz,
+            "uplink_frequency_source": uplink_source,
+        }
+        downlink_programmed = False
+        try:
+            response = rig.rigctld_set_downlink_frequency(
+                radio_receive_target_hz, RIGCTLD_PORT
+            )
+            _raise_for_rigctld_error(response, "downlink frequency")
+            downlink_programmed = True
+            if radio_uplink_target_hz is not None:
+                response = rig.rigctld_set_uplink_frequency(
+                    radio_uplink_target_hz, RIGCTLD_PORT
+                )
+                _raise_for_rigctld_error(response, "uplink frequency")
+            _write_fdt_control_payload(payload)
+        except Exception:
+            if downlink_programmed:
+                try:
+                    rig.rigctld_set_downlink_frequency(
+                        int(round(receive_hz)), RIGCTLD_PORT
+                    )
+                except Exception as rollback_exc:
+                    print(f"[WARNING] Could not restore downlink after FDT enable failure: {rollback_exc}")
+            if uplink_hz is not None:
+                try:
+                    rig.rigctld_set_uplink_frequency(
+                        int(round(uplink_hz)), RIGCTLD_PORT
+                    )
+                except Exception as rollback_exc:
+                    print(f"[WARNING] Could not restore uplink after FDT enable failure: {rollback_exc}")
+            raise
+        message = (
+            f"FDT enabled: radio receive {radio_receive_target_hz / 1e6:.6f} MHz; "
+            f"downlink at satellite {downlink_at_sat_hz / 1e6:.6f} MHz."
+        )
+        if radio_uplink_target_hz is not None and uplink_at_sat_hz is not None:
+            message += (
+                f" Radio uplink {radio_uplink_target_hz / 1e6:.6f} MHz; "
+                f"uplink at satellite {uplink_at_sat_hz / 1e6:.6f} MHz."
+            )
+        _set_status_message(message, last_command="enable_fdt")
+        return {"ok": True, "action": "enable_fdt", "message": message, **payload}
+    except Exception as exc:
+        message = f"Could not enable FDT: {exc}"
+        _set_status_message(message, last_command="enable_fdt")
+        return {"ok": False, "action": "enable_fdt", "message": message}
+
+
+def disable_fdt_from_web():
+    """Stop continuous FDT for the current LINEAR pass."""
+    action = "disable_fdt"
+    status = read_tracking_status()
+    with STATE_LOCK:
+        tracking_running = bool(APP_STATE.get("tracking_running"))
+        current_key = APP_STATE.get("current_pass_key")
+        active_pass = next(
+            (p for p in APP_STATE.get("passes", []) if p.get("_key") == current_key),
+            {},
+        )
+    satellite_type = status.get("satellite_type") or active_pass.get("satellite_type") or ""
+    if not tracking_running or str(satellite_type).strip().upper() != "LINEAR":
+        return {
+            "ok": False,
+            "action": action,
+            "message": "Pause FDT is available only during an active LINEAR satellite pass.",
+        }
+
+    clear_fdt_control_state("Pause FDT requested")
+    message = "FDT paused. Continuous Doppler tuning has stopped; the radio remains at its last tuned frequencies."
+    _set_status_message(message, last_command=action)
+    return {
+        "ok": True,
+        "action": action,
+        "message": message,
+        "fdt_enabled": False,
+        "fdt_recalculation_interval": get_fdt_recalculation_interval(),
+        "fdt_recalculation_interval_override": get_fdt_recalculation_interval_override(),
+        "fdt_cadence_mode": (
+            "override" if get_fdt_recalculation_interval_override() is not None else "auto"
+        ),
+    }
+
+def read_fdt_console_status(filename=FDT_CONTROL_FILE):
+    """Return the current pass's FDT calculation, or an empty mapping."""
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def update_test_pass_fdt_console_status(fdt_status, tracking_status):
+    """Add current tracker Doppler and overlay live test-pass radio values."""
+    live_status = dict(fdt_status) if isinstance(fdt_status, dict) else {}
+    if not live_status:
+        # A Doppler-only console status must not make the legacy
+        # payload-presence check report that FDT itself is enabled.
+        live_status["enabled"] = False
+    if not isinstance(tracking_status, dict):
+        return live_status
+
+    def copy_finite_value(target_key, source_key, multiplier=1.0):
+        try:
+            value = float(tracking_status.get(source_key)) * multiplier
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(value):
+            live_status[target_key] = value
+
+    # This is the authoritative current downlink Doppler from
+    # bqe_track_continuously.  It is a live orbital calculation for a real pass
+    # and the automatically declining configured value for a test pass.
+    copy_finite_value("current_downlink_doppler_hz", "downlink_doppler_hz")
+
+    if (
+            not _fdt_status_enabled(fdt_status)
+            or not bool(tracking_status.get("test_pass"))):
+        return live_status
+
+    copy_finite_value("radio_receive_frequency_hz", "downlink_frequency_hz")
+    copy_finite_value("radio_uplink_frequency_hz", "uplink_frequency_hz")
+    copy_finite_value("doppler_at_receive_frequency_hz", "downlink_doppler_hz")
+    copy_finite_value(
+        "doppler_at_radio_uplink_frequency_hz",
+        "uplink_doppler_hz",
+        multiplier=-1.0,
+    )
+    return live_status
+
+
+def runtime_control_status(
+        tracking_running,
+        satellite_type,
+        antenna_tracking_effective,
+        tracking_status,
+        fdt_console_status):
+    """Return the effective antenna-tracking and radio-tuning states.
+
+    The tracker reports antenna movement directly.  For LINEAR passes, the FDT
+    control payload is the authoritative runtime tuning switch.  Other passes
+    use the tracker's tuning/Doppler boolean when it is available.
+    """
+    process_running = bool(tracking_running)
+    tracking_enabled = bool(
+        process_running and antenna_tracking_effective is True
+    )
+
+    reported_tuning = None
+    for field_name in (
+            "tuning_enabled",
+            "radio_tuning_enabled",
+            "frequency_tracking_enabled",
+            "doppler_tracking_enabled",
+            "enable_frequency_tracking",
+            "enable_doppler_tracking"):
+        field_value = tracking_status.get(field_name)
+        if isinstance(field_value, bool):
+            reported_tuning = field_value
+            break
+
+    if not process_running:
+        tuning_enabled = False
+    elif str(satellite_type or "").strip().upper() == "LINEAR":
+        tuning_enabled = _fdt_status_enabled(fdt_console_status)
+    elif isinstance(reported_tuning, bool):
+        tuning_enabled = reported_tuning
+    else:
+        tuning_enabled = True
+
+    return tracking_enabled, tuning_enabled
 
 def status_payload():
     """Build JSON-safe status object for /api/status."""
@@ -2027,15 +3455,52 @@ def status_payload():
 
     observer_location = load_observer_location()
     tracking_status = augment_tracking_status_for_map(read_tracking_status(), observer_location)
+    fdt_console_status = read_fdt_console_status()
+    fdt_console_status = update_test_pass_fdt_console_status(
+        fdt_console_status,
+        tracking_status,
+    )
     celestial_positions = calculate_sun_moon_positions(observer_location, now)
+    with STATE_LOCK:
+        current_satellite_for_fdt = APP_STATE.get("current_satellite")
+    fdt_passband = (
+        load_fdt_passband(current_satellite_for_fdt)
+        if current_satellite_for_fdt
+        else {}
+    )
 
     with STATE_LOCK:
         passes = list(APP_STATE["passes"])
         current_key = APP_STATE["current_pass_key"]
+        current_pass = next((p for p in passes if p.get("_key") == current_key), {})
+        current_satellite_type = (
+            tracking_status.get("satellite_type")
+            or current_pass.get("satellite_type")
+            or ""
+        )
         pass_active = bool(APP_STATE["tracking_running"]) or any(
             p["_start_dt"] <= now <= p["_end_dt"] for p in passes
         )
         preset_command_running = bool(APP_STATE.get("preset_command_running", False))
+        antenna_tracking_override = APP_STATE.get("antenna_tracking_override")
+        reported_antenna_tracking = tracking_status.get("enable_antenna_tracking")
+        # A menu override is authoritative immediately; otherwise use the active
+        # tracker's reported YAML/CLI-derived state when a pass is running.
+        if isinstance(antenna_tracking_override, bool):
+            antenna_tracking_effective = antenna_tracking_override
+        elif pass_active and isinstance(reported_antenna_tracking, bool):
+            antenna_tracking_effective = reported_antenna_tracking
+        else:
+            antenna_tracking_effective = None
+        antenna_tracking_disabled = antenna_tracking_effective is False
+        tracking_enabled, tuning_enabled = runtime_control_status(
+            APP_STATE["tracking_running"],
+            current_satellite_type,
+            antenna_tracking_effective,
+            tracking_status,
+            fdt_console_status,
+        )
+        fdt_enabled = _fdt_status_enabled(fdt_console_status)
         payload = {
             "utc_time": now.strftime("%H:%M:%S UTC"),
             "utc_date": now.strftime("%d %b %Y"),
@@ -2055,6 +3520,28 @@ def status_payload():
             "presets": list(APP_STATE.get("presets", [])),
             "preset_command_running": preset_command_running,
             "preset_buttons_enabled": not pass_active and not preset_command_running,
+            "antenna_tracking_override": antenna_tracking_override,
+            "antenna_tracking_effective": antenna_tracking_effective,
+            "antenna_tracking_disabled": antenna_tracking_disabled,
+            "tracking_enabled": tracking_enabled,
+            "tuning_enabled": tuning_enabled,
+            "fdt_enabled": fdt_enabled,
+            "fdt_recalculation_interval": get_fdt_recalculation_interval(),
+            "fdt_recalculation_interval_override": get_fdt_recalculation_interval_override(),
+            "fdt_cadence_mode": (
+                "override" if get_fdt_recalculation_interval_override() is not None else "auto"
+            ),
+            "tracking_sleep_interval_seconds": TRACKING_SLEEP_INTERVAL_SECONDS,
+            "tracking_sleep_interval_high_elevation_seconds": TRACKING_SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS,
+            "tracking_high_pass_elevation": TRACKING_HIGH_PASS_ELEVATION,
+            "fdt_available": bool(
+                APP_STATE.get("tracking_running")
+                and str(current_satellite_type).strip().upper() == "LINEAR"
+                and not CURRENT_PASS_END_EVENT.is_set()
+                and not SHUTDOWN_EVENT.is_set()
+            ),
+            "fdt_console_status": fdt_console_status,
+            "fdt_passband": fdt_passband,
             "countdown": countdown_text(now, passes),
             "passes": [],
         }
@@ -2072,6 +3559,7 @@ def status_payload():
             "start": format_dt(p["_start_dt"]),
             "finish": format_dt(p["_end_dt"]),
             "status": status,
+            "test_pass": bool(p.get("test_pass")),
         })
     return payload
 
@@ -2096,6 +3584,9 @@ def start_web_console(port=None):
         command_payload_func=handle_web_command,
         index_html=build_index_html(web_settings),
         sstv_gallery_location=web_settings.sstv_gallery_location,
+        recordings_location=web_settings.recordings_location,
+        logs_location=LOG_DIR,
+        ui_theme=web_settings.ui_theme,
     )
     server = ThreadingHTTPServer(("0.0.0.0", port), handler_factory)
     WEB_SERVER = server
@@ -2115,9 +3606,11 @@ def start_web_console(port=None):
 
 def main():
     restore_default_keyboard_interrupt_handler()
-    # Clear a stale file left by an unclean prior shutdown before a new idle task starts.
+    # Clear temporary/stale runtime files left by a previous scheduler process.
     remove_idle_task_status_file()
+    clear_antenna_tracking_override()
     with STATE_LOCK:
+        APP_STATE["antenna_tracking_override"] = None
         # The preset pane intentionally reflects only files present at startup.
         APP_STATE["presets"] = discover_preset_nicknames(PRESETS_DIR)
     web_server = start_web_console()
@@ -2129,54 +3622,82 @@ def main():
             print(f"Error: could not create {SCHEDULE_FILE}: {e}")
             with STATE_LOCK:
                 APP_STATE["last_message"] = f"Error creating {SCHEDULE_FILE}: {e}"
-            # Keep the web console up so the error is visible in a browser.
             wait_for_shutdown()
             return
 
-        try:
-            passes = refresh_schedule_state(SCHEDULE_FILE)
-        except Exception as e:
-            print(f"Error: {e}")
+        # Re-read schedule.json while waiting instead of iterating one startup snapshot.
+        # This is important for Tracking > Run test pass now: the new entry is inserted
+        # only ten seconds in the future and must be noticed even when the original
+        # schedule was empty or the scheduler was waiting for a much later pass.
+        idle_process = None
+        idle_for_key = None
+        no_pending_message_printed = False
+
+        while not SHUTDOWN_EVENT.is_set():
+            try:
+                passes = refresh_schedule_state(SCHEDULE_FILE)
+            except Exception as e:
+                print(f"Error loading {SCHEDULE_FILE}: {e}")
+                with STATE_LOCK:
+                    APP_STATE["last_message"] = f"Error loading {SCHEDULE_FILE}: {e}"
+                sleep_until_shutdown_or_timeout(1.0)
+                continue
+
+            now = utc_now()
             with STATE_LOCK:
-                APP_STATE["last_message"] = f"Error loading {SCHEDULE_FILE}: {e}"
-            # Keep the web console up so the error is visible in a browser.
-            wait_for_shutdown()
-            return
+                completed = set(APP_STATE.get("completed", []))
 
-        if not passes:
-            print(f"No passes found in {SCHEDULE_FILE}.")
-            with STATE_LOCK:
-                APP_STATE["last_message"] = f"No passes found in {SCHEDULE_FILE}."
-            wait_for_shutdown()
-            return
+            # Mark expired entries once so they are not reconsidered on every reload.
+            for entry in passes:
+                if entry["_end_dt"] <= now and entry["_key"] not in completed:
+                    completed.add(entry["_key"])
+                    with STATE_LOCK:
+                        APP_STATE["completed"].append(entry["_key"])
 
-        print(f"[OK] Loaded {len(passes)} passes from {SCHEDULE_FILE}")
+            pending = [
+                entry for entry in passes
+                if entry["_end_dt"] > now and entry["_key"] not in completed
+            ]
 
-        for entry in passes:
-            if SHUTDOWN_EVENT.is_set():
-                break
+            if not pending:
+                if idle_process is not None:
+                    stop_idle_wait_program(idle_process)
+                    idle_process = None
+                    idle_for_key = None
+                if not no_pending_message_printed:
+                    print(f"[INFO] No pending passes in {SCHEDULE_FILE}. Waiting for schedule changes.")
+                    with STATE_LOCK:
+                        APP_STATE["last_message"] = "No pending passes. Waiting for schedule changes."
+                    no_pending_message_printed = True
+                sleep_until_shutdown_or_timeout(0.5)
+                continue
 
+            no_pending_message_printed = False
+            entry = pending[0]
             sat_name = entry["_satellite"]
             start_time = entry["_start_dt"]
             end_time = entry["_end_dt"]
 
             now = utc_now()
-            if end_time <= now:
-                msg = f"Skipping {sat_name} — pass already ended at {end_time.isoformat()}"
-                print(msg)
-                with STATE_LOCK:
-                    APP_STATE["last_message"] = msg
-                    APP_STATE["completed"].append(entry["_key"])
+            if start_time > now:
+                # Start the idle activity once for the pass currently at the head of
+                # the schedule. Re-evaluate the schedule every second so a newly
+                # inserted test pass can become the next pass immediately.
+                if idle_for_key != entry["_key"]:
+                    if idle_process is not None:
+                        stop_idle_wait_program(idle_process)
+                    idle_process = do_while_waiting()
+                    idle_for_key = entry["_key"]
+
+                remaining = (start_time - now).total_seconds()
+                wait_seconds = min(1.0, max(0.05, remaining))
+                sleep_until_shutdown_or_timeout(wait_seconds)
                 continue
 
-            if start_time > now:
+            if idle_process is not None:
+                stop_idle_wait_program(idle_process)
                 idle_process = None
-                try:
-                    idle_process = do_while_waiting()
-                    if not wait_until(start_time):
-                        break
-                finally:
-                    stop_idle_wait_program(idle_process)
+                idle_for_key = None
 
             if SHUTDOWN_EVENT.is_set():
                 break
@@ -2186,18 +3707,16 @@ def main():
             if SHUTDOWN_EVENT.is_set():
                 break
 
-            print("[OK] Pass complete. Waiting for next scheduled interval...\n")
-            sleep_until_shutdown_or_timeout(5)
+            print("[OK] Pass complete. Re-reading schedule...\n")
+            sleep_until_shutdown_or_timeout(0.25)
+
+        if idle_process is not None:
+            stop_idle_wait_program(idle_process)
 
         if SHUTDOWN_EVENT.is_set():
             print("\n[INFO] Shutdown requested. Exiting BQE WISP.")
             with STATE_LOCK:
                 APP_STATE["last_message"] = "Shutdown requested. Exiting BQE WISP."
-        else:
-            print("\n[SUCCESS] All scheduled passes completed. Web console remains available.")
-            with STATE_LOCK:
-                APP_STATE["last_message"] = "All scheduled passes completed."
-            wait_for_shutdown()
 
     except KeyboardInterrupt:
         print("\n[INFO] Keyboard interrupt received. Exiting BQE WISP.")
@@ -2206,8 +3725,11 @@ def main():
         with STATE_LOCK:
             restart_requested = APP_STATE["restart_requested"]
         cleanup_helper_programs()
+        clear_antenna_tracking_override()
         with STATE_LOCK:
             APP_STATE["tracking_running"] = False
+            APP_STATE["fdt_recalculation_interval"] = FDT_RECALCULATION_INTERVAL
+            APP_STATE["fdt_recalculation_interval_override"] = None
             APP_STATE["current_pass_key"] = None
             APP_STATE["current_satellite"] = None
             APP_STATE["last_message"] = "BQE WISP has exited."
@@ -2215,6 +3737,8 @@ def main():
             time.sleep(load_web_console_settings(GENERAL_SETTINGS_FILE).ui_refresh_interval_seconds + 0.25)
         try:
             if web_server is not None:
+                from plugins.bqe_audio_stream import AUDIO_STREAM
+                AUDIO_STREAM.close()
                 web_server.shutdown()
                 web_server.server_close()
         except Exception as e:

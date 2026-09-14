@@ -26,6 +26,15 @@ local_file = 'keps.txt'
 rs61_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=64881&FORMAT=3le'
 local_file = 'keps.txt'
 
+tisat1_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=36799&FORMAT=3le'
+local_file = 'keps.txt'
+
+cute1_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=27844&FORMAT=3le'
+local_file = 'keps.txt'
+
+marina_url ='https://celestrak.org/NORAD/elements/gp.php?CATNR=69920&FORMAT=3le'
+local_file = 'keps.txt'
+
 
 def do_update(local_file, source_url, update_mode):  #update_mode is write for first call, then append for subsequent.
 
@@ -67,8 +76,11 @@ def main():
     do_update("keps.tmp", monitor3_url, "a")     # Monitor-3
     do_update("keps.tmp", monitor4_url, "a")     # Monitor-4
     do_update("keps.tmp", utmn2_url, "a")        # rs27/utmn-2
-    do_update("keps.tmp", otp2_url, "a")        # otp-2
-    do_update("keps.tmp", rs61_url, "a")        # 239alferov
+    do_update("keps.tmp", otp2_url, "a")         # otp-2
+    do_update("keps.tmp", rs61_url, "a")         # 239alferov
+    do_update("keps.tmp", tisat1_url, "a")       # Tisat1 (cw beacon)
+    do_update("keps.tmp", cute1_url, "a")        # co-55 cute-1
+    do_update("keps.tmp", marina_url, "a")        # marina
     
 
     remove_blank_lines("keps.tmp", "keps.txt")

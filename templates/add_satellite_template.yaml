@@ -1,0 +1,18 @@
+
+  - nickname: ""
+    satellite_type: ""
+    satellite_name: ""
+    catalog_number: ''
+    satellite_mode_required: True
+    downlink_frequency_mhz: ''
+    downlink_mode: ''
+    uplink_frequency_mhz: ''
+    uplink_mode: ''
+    bandwidth: ''
+    ctcss_tone: ''
+    enable_antenna_tracking: False   # 2m antennas are not currently mounted
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+    program_to_run_during_pass:
+  

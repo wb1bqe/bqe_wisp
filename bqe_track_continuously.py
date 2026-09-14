@@ -30,6 +30,7 @@ import requests   # Antenna tracking
 
 import subprocess # Used by Hamlib interface routines
 import shutil
+import sys        # Diagnostic information on python location
 import yaml       # For loading configs from YAML
 
 import bqe_hamlib_interface as rig
@@ -50,6 +51,7 @@ DEFAULT_GENERAL_SETTINGS = {
     "rigctld_path": None,
     "sleep_interval_seconds": None,
     "sleep_interval_high_elevation_seconds": None,
+    "fdt_recalculation_interval": None,
     "high_pass_elevation": None,
     "horizon_threshold_elevation": None,
     "default_observer_latitude": None,
@@ -169,24 +171,6 @@ def _normalize_url(value):
     return value.rstrip("/")
 
 
-#def _load_antenna_rules(track_settings, defaults):
-#   rules = track_settings.get("antenna_selection_rules", defaults["antenna_selection_rules"])
-#    if not isinstance(rules, list):
-#        raise ValueError("general_settings.yaml setting 'antenna_selection_rules' must be a list")
-
-#    normalized_rules = []
-#    for index, rule in enumerate(rules, start=1):
-#        if not isinstance(rule, dict):
-#            raise ValueError(f"antenna_selection_rules item {index} must be a mapping")
-#        normalized_rules.append({
-#            "min_azimuth": _parse_float(rule.get("min_azimuth"), 0, f"antenna_selection_rules[{index}].min_azimuth"),
-#            "max_azimuth": _parse_float(rule.get("max_azimuth"), 360, f"antenna_selection_rules[{index}].max_azimuth"),
-#            "antenna": _parse_int(rule.get("antenna"), 1, f"antenna_selection_rules[{index}].antenna"),
-#            "description": str(rule.get("description") or f"Antenna {rule.get('antenna')}").strip(),
-#        })
-#    return normalized_rules
-
-
 def load_general_settings(filename=GENERAL_SETTINGS_FILE):
     """Load practical runtime settings for this tracker from general_settings.yaml."""
     settings = dict(DEFAULT_GENERAL_SETTINGS)
@@ -236,6 +220,11 @@ def load_general_settings(filename=GENERAL_SETTINGS_FILE):
         track_settings.get("sleep_interval_high_elevation"),
         settings["sleep_interval_high_elevation_seconds"],
         "program_settings.bqe_track_continuously.sleep_interval_high_elevation",
+    )
+    settings["fdt_recalculation_interval"] = _parse_seconds(
+        track_settings.get("fdt_recalculation_interval"),
+        settings["fdt_recalculation_interval"],
+        "program_settings.bqe_track_continuously.fdt_recalculation_interval",
     )
     settings["high_pass_elevation"] = _parse_float(
         track_settings.get("high_pass_elevation"),
@@ -288,6 +277,14 @@ def load_general_settings(filename=GENERAL_SETTINGS_FILE):
         "program_settings.bqe_track_continuously.process_stop_timeout_seconds",
     )
 
+    # Test-pass values are intentionally defined only in general_settings.yaml.
+    # Do not provide Python fallbacks for these settings.
+    for key in ("test_pass_azimuth", "test_pass_elevation", "test_pass_doppler"):
+        setting_name = f"program_settings.bqe_track_continuously.{key}"
+        if key not in track_settings or track_settings[key] is None:
+            raise KeyError(f"Required general_settings.yaml setting {setting_name!r} is missing")
+        settings[key] = _parse_float(track_settings[key], None, setting_name)
+
     # Normalize file paths after loading values from YAML.
     for key in (
         "tle_file",
@@ -325,6 +322,74 @@ ANTENNA_SELECTION_RULES = GENERAL_SETTINGS["antenna_selection_rules"]
 RIGCTLD_STARTUP_DELAY_SECONDS = GENERAL_SETTINGS["rigctld_startup_delay_seconds"]
 RIGCTLD_STARTUP_OUTPUT_TIMEOUT_SECONDS = GENERAL_SETTINGS["rigctld_startup_output_timeout_seconds"]
 PROCESS_STOP_TIMEOUT_SECONDS = GENERAL_SETTINGS["process_stop_timeout_seconds"]
+TEST_PASS_AZIMUTH = GENERAL_SETTINGS["test_pass_azimuth"]
+TEST_PASS_ELEVATION = GENERAL_SETTINGS["test_pass_elevation"]
+TEST_PASS_DOPPLER = GENERAL_SETTINGS["test_pass_doppler"]
+TEST_PASS_DOPPLER_DECREMENT_HZ = 300.0
+FDT_RECALCULATION_INTERVAL = GENERAL_SETTINGS["fdt_recalculation_interval"]
+FDT_RECALCULATION_INTERVAL_MIN_SECONDS = 4.0
+FDT_RECALCULATION_INTERVAL_MAX_SECONDS = 30.0
+
+
+def normalize_fdt_recalculation_interval(value, default):
+    """Return an FDT interval constrained to the range exposed by the console."""
+    try:
+        interval = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return min(
+        FDT_RECALCULATION_INTERVAL_MAX_SECONDS,
+        max(FDT_RECALCULATION_INTERVAL_MIN_SECONDS, interval),
+    )
+
+
+def sleep_until_next_tracking_cycle(
+        interval_seconds,
+        fdt_control_file=None,
+        stop_file=None,
+        watch_for_fdt_update=False,
+        known_fdt_enabled=False,
+        known_fdt_timestamp=None):
+    """Sleep for one loop interval, waking for FDT or a clean-stop request.
+
+    Returns True when the whole interval elapsed, False for an FDT change, and
+    None when the parent scheduler requested an orderly shutdown.
+    """
+    interval_seconds = max(0.0, float(interval_seconds))
+    deadline = time.monotonic() + interval_seconds
+    while True:
+        if stop_file and os.path.exists(stop_file):
+            return None
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            return True
+        time.sleep(min(0.25, remaining_seconds))
+        if not watch_for_fdt_update or not fdt_control_file:
+            continue
+        try:
+            with open(fdt_control_file, "r", encoding="utf-8") as f:
+                fdt_request = json.load(f)
+            if not isinstance(fdt_request, dict):
+                continue
+            requested_enabled = fdt_request.get("enabled", True) is True
+            requested_timestamp = fdt_request.get("timestamp_utc")
+            if (
+                    requested_enabled != known_fdt_enabled
+                    or (
+                        requested_enabled
+                        and requested_timestamp
+                        and requested_timestamp != known_fdt_timestamp
+                    )):
+                print(
+                    "----------------> FDT control update detected; recalculating now."
+                )
+                return False
+        except FileNotFoundError:
+            if known_fdt_enabled:
+                print("----------------> FDT pause request detected; updating now.")
+                return False
+        except (json.JSONDecodeError, OSError):
+            continue
 
 
 def write_status_file(status_file, **values):
@@ -347,22 +412,25 @@ def write_status_file(status_file, **values):
         print(f"Warning: could not write WISP status file {status_file}: {e}")
 
 
-def select_antenna(desired_az, desired_el):
-    """Choose the antenna number for the requested azimuth/elevation."""
+def select_antenna(desired_az, desired_el, downlink_frequency_hz):
+    """Choose the antenna number for the requested azimuth/elevation and frequency."""
 
     # Determine what antenna we want to select based on az & el
     # (duplicate of RCS-10 rules).
     #
     # Current Antenna Assignments:
     # 1 SE Yagi
-    # 2 UHF on pole
-    # 3 Southwest Yagi
+    # 2 SW Yagi
+    # 3 empty
     # 4 Vertical in tree
-    # 7 NE Yagi
+    # 
     # 8 NW Yagi
 
     # Modified for UHF antennas.  2m is NOT on switch.
-    if 0 <= float(desired_az) < 90:
+    if float(downlink_frequency_hz) < 150e6:
+        print('Selecting Antenna 4 (frequency below 150 MHz)\n')
+        return 4
+    elif 0 <= float(desired_az) < 90:
         print('Selecting Antenna 7 (NE Yagi)\n')
         return 7
     elif 90 <= float(desired_az) < 220:
@@ -702,13 +770,17 @@ def start_rigctld_process(
         "-t", str(rigctld_port),
     ]
 
+    # Syntax in  yaml is sensitive to python location. In case of errors, the proper loc is printed here.
+    
     print("Starting rigctld with command:", " ".join(cmd))
+
     proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
 
     # Give rigctld a moment to fail fast if the command line, COM port, or radio
     # model is wrong.  If it exits immediately, show stderr/stdout to make the
@@ -797,11 +869,37 @@ def start_pass_program(program_to_run, pid_file):
 
     exe = shutil.which(cmd[0]) or cmd[0]
     cmd[0] = exe
-    print("Starting pass program with command:", " ".join(cmd))
-    proc = subprocess.Popen(cmd)
-    write_pid_file(pid_file, proc.pid, "pass program")
-    return proc
+    print("[INFO]Starting pass program with command:", " ".join(cmd))
+    
+    # Diagnostic info on where python lives. (Must mach what came from yaml)
+    print("[INFO] Python information:")
+    print("[INFO] Command representation:", repr(cmd))
+    print("[INFO] Current Python:", sys.executable)
+    pass_program_stop_file = None
+    popen_kwargs = {}
+    if any("sound_recorder" in os.path.basename(part).lower() for part in cmd):
+        # The recorder understands this environment variable and will flush the
+        # MP3 encoder, close the .part file, and rename it before exiting.  A
+        # file request works identically on Windows and Linux.
+        pass_program_stop_file = (pid_file + ".stop") if pid_file else None
+        if pass_program_stop_file:
+            try:
+                os.remove(pass_program_stop_file)
+            except FileNotFoundError:
+                pass
+            child_environment = os.environ.copy()
+            child_environment["BQE_PASS_STOP_FILE"] = pass_program_stop_file
+            popen_kwargs["env"] = child_environment
 
+    try:
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        proc._bqe_stop_file = pass_program_stop_file
+        write_pid_file(pid_file, proc.pid, "pass program")
+        return proc
+    except:
+        print("[ERROR] Error starting pass helper program.")
+    else:
+        print("[INFO] Helper program successfully started.")
 
 def stop_pass_program(proc, timeout_seconds=PROCESS_STOP_TIMEOUT_SECONDS):
     """Stop the optional per-pass program started by this script."""
@@ -810,13 +908,45 @@ def stop_pass_program(proc, timeout_seconds=PROCESS_STOP_TIMEOUT_SECONDS):
     try:
         if proc.poll() is None:
             print("Stopping pass program...")
-            proc.terminate()
+            stop_file = getattr(proc, "_bqe_stop_file", None)
+            if stop_file:
+                try:
+                    directory = os.path.dirname(os.path.abspath(stop_file))
+                    if directory:
+                        os.makedirs(directory, exist_ok=True)
+                    temporary_file = "{}.{}.tmp".format(stop_file, os.getpid())
+                    with open(temporary_file, "w", encoding="utf-8") as f:
+                        f.write("stop\n")
+                    os.replace(temporary_file, stop_file)
+                    print("Requested clean recorder shutdown; waiting for MP3 finalization...")
+                except Exception as e:
+                    print(f"Warning: could not create recorder stop request: {e}")
+                    stop_file = None
+
+            if not stop_file:
+                proc.terminate()
             try:
                 proc.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
-                print("Pass program did not stop after terminate(); killing it...")
-                proc.kill()
-                proc.wait(timeout=timeout_seconds)
+                if stop_file:
+                    print("Recorder did not finish after the clean-stop timeout; terminating it...")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=timeout_seconds)
+                    except subprocess.TimeoutExpired:
+                        print("Pass program still did not stop; killing it...")
+                        proc.kill()
+                        proc.wait(timeout=timeout_seconds)
+                else:
+                    print("Pass program did not stop after terminate(); killing it...")
+                    proc.kill()
+                    proc.wait(timeout=timeout_seconds)
+            finally:
+                if stop_file:
+                    try:
+                        os.remove(stop_file)
+                    except FileNotFoundError:
+                        pass
     except Exception as e:
         print(f"Warning: could not stop pass program cleanly: {e}")
 
@@ -861,8 +991,39 @@ def parse_bool(value):
     """Accept bools or common string forms from YAML/CLI."""
     return _parse_bool(value)
 
+
+def read_antenna_tracking_override(path):
+    """Return a temporary bool override from bqe_wisp, or None when not present."""
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f"Warning: could not read antenna tracking override file {path}: {e}")
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("enable_antenna_tracking")
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    if normalized in ("1", "true", "yes", "y", "on"):
+        return True
+    if normalized in ("0", "false", "no", "n", "off"):
+        return False
+    return None
+
+
 def main():
     #Note: Keps can be downloaded from:  https://www.amsat.org/tle/dailytle.txt
+
     rigctld_port = RIGCTLD_PORT
     ap = argparse.ArgumentParser(description="Compute Az/El and Doppler for the specified satellite ")
     current_antenna = INITIAL_ANTENNA
@@ -882,10 +1043,14 @@ def main():
     ap.add_argument("--ctcss_tone", type=str, default=None, help='CTCSS tone for FM sat, or 0 if not required.')
     ap.add_argument("--satellite_mode_required", type=str, default=None, help="Enable rig satellite_mode. Overrides YAML/default if supplied.")
     ap.add_argument("--enable_antenna_tracking", type=str, default=None, help="Enable antenna tracking. Overrides YAML/default if supplied.")
+    ap.add_argument("--antenna_tracking_override_file", type=str, default=None, help="Optional runtime override file written by bqe_wisp.py. Its enable_antenna_tracking value temporarily overrides YAML/CLI.")
+    ap.add_argument("--fdt_control_file", type=str, default=None, help="Optional runtime FDT base-frequency control file written by bqe_wisp.py.")
     ap.add_argument("--enable_tuning", type=str, default=None, help="Enable radio tuning. Overrides YAML/default if supplied.")
     ap.add_argument("--status_file", type=str, default=DEFAULT_STATUS_FILE, help="Optional JSON status file for bqe_wisp.py web console Az/El updates.")
     ap.add_argument("--rigctld_pid_file", type=str, default=DEFAULT_RIGCTLD_PID_FILE, help="Path where the started rigctld PID is written for parent-process cleanup.")
     ap.add_argument("--pass_program_pid_file", type=str, default=DEFAULT_PASS_PROGRAM_PID_FILE, help="Path where the optional program_to_run_during_pass PID is written for cleanup.")
+    ap.add_argument("--stop_file", type=str, default=None, help="Optional request file used by bqe_wisp.py to stop tracking and its pass helper cleanly.")
+    ap.add_argument("--test_pass", action="store_true", help="Use fixed test Az/El/Doppler values instead of live orbital calculations. Intended for bqe_wisp Run test pass now.")
     
     ###########################       Hamlib Args       ###########################
     # Default set to None so we use Yaml definitions unless overridden here.
@@ -914,18 +1079,24 @@ def main():
     status_file = args.status_file
     rigctld_pid_file = args.rigctld_pid_file
     pass_program_pid_file = args.pass_program_pid_file
+    antenna_tracking_override_file = args.antenna_tracking_override_file
+    fdt_control_file = args.fdt_control_file
+    stop_file = args.stop_file
     if status_file:
         write_status_file(
             status_file,
             satellite=args.satellite,
             satellite_type=None,
+            tuning_enabled=False,
+            fdt_enabled=False,
             azimuth=None,
             elevation=None,
             uplink_freq_hz=None,
             downlink_freq_hz=None,
             uplink_mode=None,
             downlink_mode=None,
-            message="tracking starting",
+            test_pass=bool(args.test_pass),
+            message="test pass starting" if args.test_pass else "tracking starting",
         )
 
     tle_file = args.tle_file
@@ -945,8 +1116,9 @@ def main():
     satellite_nickname        = satellite_config.get("nickname", satellite)
     satellite_name            = satellite_config.get("satellite_name", satellite)
     satellite_type            = satellite_config.get("satellite_type") or ""
+    is_linear_satellite       = str(satellite_type).strip().upper() == "LINEAR"
     satellite_catalog_number  = satellite_config.get("catalog_number")
-    if normalize_catalog_number(satellite_catalog_number) is None:
+    if normalize_catalog_number(satellite_catalog_number) is None and not args.test_pass:
         raise ValueError(
             f"Satellite '{satellite_nickname}' in {args.satellite_config} is missing catalog_number; "
             "catalog_number is required for TLE lookup."
@@ -991,12 +1163,24 @@ def main():
     enable_antenna_tracking = parse_bool(cli_override(args.enable_antenna_tracking, satellite_config.get("enable_antenna_tracking"), GENERAL_SETTINGS["default_enable_antenna_tracking"]))
     enable_tuning = parse_bool(cli_override(args.enable_tuning, satellite_config.get("enable_tuning"), GENERAL_SETTINGS["default_enable_tuning"]))
 
+    runtime_antenna_tracking_override = read_antenna_tracking_override(antenna_tracking_override_file)
+    effective_enable_antenna_tracking = (
+        runtime_antenna_tracking_override
+        if runtime_antenna_tracking_override is not None
+        else enable_antenna_tracking
+    )
+
     if status_file:
         write_status_file(
             status_file,
             satellite=satellite_nickname,
             satellite_name=satellite_name,
             satellite_type=satellite_type,
+            tuning_enabled=False if is_linear_satellite else enable_tuning,
+            fdt_enabled=False,
+            enable_antenna_tracking=effective_enable_antenna_tracking,
+            configured_enable_antenna_tracking=enable_antenna_tracking,
+            antenna_tracking_override=runtime_antenna_tracking_override,
             azimuth=None,
             elevation=None,
             uplink_frequency_mhz=uplink_frequency_mhz,
@@ -1006,7 +1190,8 @@ def main():
             uplink_mode=uplink_mode,
             downlink_mode=downlink_mode,
             mode=downlink_mode,
-            message="tracking configured",
+            test_pass=bool(args.test_pass),
+            message="test pass configured" if args.test_pass else "tracking configured",
         )
 
     # ------------------- Radio config: YAML + CLI override -------------------
@@ -1061,7 +1246,7 @@ def main():
 
     try:
         pass_program_proc = start_pass_program(program_to_run_during_pass, pass_program_pid_file)
-
+        #time.sleep(3) #(Can't do this due to rigctld conflict) Give the companion program time to start to cover cases where radio setup changes its freq. (I.e. wsjtx)
         # Enable split/satellite mode after dictionary values and CLI overrides are resolved.
 
         if satellite_mode_required:
@@ -1084,56 +1269,179 @@ def main():
         print("ctcss_tone", ctcss_tone)
         print("enable_antenna_tracking", enable_antenna_tracking)
         print("enable_tuning", enable_tuning)
+        print("linear satellite - FDT controls in-pass Doppler retuning", is_linear_satellite)
+        print("test pass mode", args.test_pass)
+        if args.test_pass:
+            print(
+                f"TEST PASS starting data: azimuth={TEST_PASS_AZIMUTH} deg, "
+                f"elevation={TEST_PASS_ELEVATION} deg, doppler={TEST_PASS_DOPPLER:+.0f} Hz; "
+                f"Doppler decreases {TEST_PASS_DOPPLER_DECREMENT_HZ:.0f} Hz per tuning interval"
+            )
 
-        
         print(satellite_nickname, satellite_name, satellite_catalog_number, downlink_mode, satellite_bandwidth, downlink_frequency_mhz, enable_antenna_tracking, enable_tuning)
-    
-        tle_satellite_name, tle_line1, tle_line2 = load_tle_by_catalog_number(tle_file, satellite_catalog_number)
-        print("TLE satellite name", tle_satellite_name)
-    
+
+        tle_satellite_name = tle_line1 = tle_line2 = None
+        if not args.test_pass:
+            tle_satellite_name, tle_line1, tle_line2 = load_tle_by_catalog_number(tle_file, satellite_catalog_number)
+            print("TLE satellite name", tle_satellite_name)
+
         # Calculate at least once to find the satellite position, and continue while above horizon.
         # We need to do this to prevent premature exit if the satellite is still below horizon at pass time. 
-        satellite_has_risen=False # Initialization
+        satellite_has_risen = bool(args.test_pass)  # A test pass is intentionally above the horizon for its whole scheduled duration.
         satellite_has_set=False # Cleanup and exit.
-        predicted_ground_track = None
+        predicted_ground_track = [] if args.test_pass else None
+        last_effective_antenna_tracking = None
+        last_fdt_timestamp = None
+        fdt_enabled = False
+        # None means FDT follows the same elevation-based cadence as every
+        # other satellite. The web-console slider can set a temporary fixed
+        # interval override for the active LINEAR pass.
+        fdt_recalculation_interval_override = None
+        test_pass_doppler_hz = float(TEST_PASS_DOPPLER) if args.test_pass else None
 
-        el_deg=-1 # Initialization - assume below horizon until we calculate that it is visible.
+        el_deg = TEST_PASS_ELEVATION if args.test_pass else -1 # Live passes assume below horizon until calculated.
     
         while satellite_has_set == False: # (I.e. Initially below horizon, and then when above horizon. )
 
-            #Use timezone-aware UTC datetime
-            ts = load.timescale()
-            now_utc = datetime.now(timezone.utc)
-            t = ts.from_datetime(now_utc)
+            if stop_file and os.path.exists(stop_file):
+                print("Orderly stop requested by bqe_wisp; cleaning up this pass.")
+                break
 
-            # Satellite object
-            sat = EarthSatellite(tle_line1, tle_line2, tle_satellite_name, ts)
-            if predicted_ground_track is None:
-                predicted_ground_track = predict_visible_ground_track(
-                    t,
-                    sat,
-                    observer,
-                    horizon_degrees=HORIZON_THRESHOLD_ELEVATION,
+            now_utc = datetime.now(timezone.utc)
+            if is_linear_satellite and fdt_control_file:
+                try:
+                    with open(fdt_control_file, "r", encoding="utf-8") as f:
+                        fdt_request = json.load(f)
+                    requested_fdt_enabled = fdt_request.get("enabled", True) is True
+
+                    # New payloads distinguish automatic cadence from a fixed
+                    # FDT slider override. Older payloads with only
+                    # fdt_recalculation_interval remain supported.
+                    cadence_mode = str(fdt_request.get("cadence_mode") or "").strip().lower()
+                    if "fdt_recalculation_interval_override" in fdt_request:
+                        requested_override_raw = fdt_request.get("fdt_recalculation_interval_override")
+                    elif cadence_mode == "auto":
+                        requested_override_raw = None
+                    else:
+                        requested_override_raw = fdt_request.get("fdt_recalculation_interval")
+
+                    if requested_override_raw is None:
+                        requested_fdt_interval_override = None
+                    else:
+                        requested_fdt_interval_override = normalize_fdt_recalculation_interval(
+                            requested_override_raw,
+                            FDT_RECALCULATION_INTERVAL,
+                        )
+
+                    if requested_fdt_interval_override != fdt_recalculation_interval_override:
+                        if requested_fdt_interval_override is None:
+                            print(
+                                "----------------> FDT cadence returned to automatic YAML "
+                                "elevation-based tracking intervals."
+                            )
+                        else:
+                            print(
+                                "----------------> FDT cadence override changed to "
+                                f"{requested_fdt_interval_override:g} seconds."
+                            )
+                    fdt_recalculation_interval_override = requested_fdt_interval_override
+                    request_timestamp = fdt_request.get("timestamp_utc")
+                    if requested_fdt_enabled and request_timestamp and request_timestamp != last_fdt_timestamp:
+                        downlink_frequency_mhz = float(fdt_request["downlink_frequency_hz"]) / 1e6
+                        downlink_freq_hz = downlink_frequency_mhz * 1e6
+                        requested_uplink_hz = fdt_request.get("uplink_frequency_hz")
+                        if requested_uplink_hz is not None:
+                            uplink_frequency_mhz = float(requested_uplink_hz) / 1e6
+                            uplink_freq_hz = uplink_frequency_mhz * 1e6
+                        last_fdt_timestamp = request_timestamp
+                        print(
+                            f"----------------> FDT adopted new LINEAR downlink base: "
+                            f"{downlink_frequency_mhz:.6f} MHz"
+                        )
+                        if requested_uplink_hz is not None:
+                            print(
+                                f"----------------> FDT adopted new LINEAR uplink base: "
+                                f"{uplink_frequency_mhz:.6f} MHz"
+                            )
+                    if requested_fdt_enabled != fdt_enabled:
+                        print(
+                            f"----------------> Continuous FDT is "
+                            f"{'ENABLED' if requested_fdt_enabled else 'DISABLED'}."
+                        )
+                    fdt_enabled = requested_fdt_enabled
+                except FileNotFoundError:
+                    if fdt_enabled:
+                        print("----------------> FDT control file removed; continuous FDT is DISABLED.")
+                    fdt_enabled = False
+                    last_fdt_timestamp = None
+                    fdt_recalculation_interval_override = None
+                except Exception as e:
+                    print(f"Warning: could not apply FDT control update: {e}")
+            downlink_frequency_mhz = float(downlink_frequency_mhz)
+
+            if args.test_pass:
+                # A test pass deliberately bypasses TLE/Skyfield position calculations so it
+                # can be used at any time, including when the selected satellite is below the horizon.
+                az_deg = float(TEST_PASS_AZIMUTH)
+                el_deg = float(TEST_PASS_ELEVATION)
+                downlink_doppler_hz = test_pass_doppler_hz
+                range_km = None
+                satellite_latitude = None
+                satellite_longitude = None
+                satellite_altitude_km = None
+            else:
+                # Use timezone-aware UTC datetime and calculate the live satellite geometry.
+                ts = load.timescale()
+                t = ts.from_datetime(now_utc)
+                sat = EarthSatellite(tle_line1, tle_line2, tle_satellite_name, ts)
+                if predicted_ground_track is None:
+                    predicted_ground_track = predict_visible_ground_track(
+                        t,
+                        sat,
+                        observer,
+                        horizon_degrees=HORIZON_THRESHOLD_ELEVATION,
+                    )
+                    print(
+                        f"----------------> Extended predicted ground track contains "
+                        f"{len(predicted_ground_track)} points "
+                        f"(one hour before AOS through one hour after LOS)."
+                    )
+
+                (
+                    az_deg,
+                    el_deg,
+                    downlink_doppler_hz,
+                    range_km,
+                    satellite_latitude,
+                    satellite_longitude,
+                    satellite_altitude_km,
+                ) = track(t, sat, observer, downlink_frequency_mhz)
+
+            downlink_freq_with_doppler_hz  = (downlink_frequency_mhz * 1e6) + downlink_doppler_hz
+
+            # Re-read the temporary web-menu override every cycle so a Tracking
+            # menu change takes effect during an active pass without restarting it.
+            runtime_antenna_tracking_override = read_antenna_tracking_override(
+                antenna_tracking_override_file
+            )
+            effective_enable_antenna_tracking = (
+                runtime_antenna_tracking_override
+                if runtime_antenna_tracking_override is not None
+                else enable_antenna_tracking
+            )
+            if effective_enable_antenna_tracking != last_effective_antenna_tracking:
+                source = (
+                    "temporary Tracking-menu override"
+                    if runtime_antenna_tracking_override is not None
+                    else "satellite/CLI configuration"
                 )
                 print(
-                    f"----------------> Extended predicted ground track contains "
-                    f"{len(predicted_ground_track)} points "
-                    f"(one hour before AOS through one hour after LOS)."
+                    f"----------------> Antenna tracking is "
+                    f"{'ENABLED' if effective_enable_antenna_tracking else 'DISABLED'} "
+                    f"by {source}."
                 )
-       
-            # Do the tracking calculation.
-            downlink_frequency_mhz = float(downlink_frequency_mhz)
-            (
-                az_deg,
-                el_deg,
-                downlink_doppler_hz,
-                range_km,
-                satellite_latitude,
-                satellite_longitude,
-                satellite_altitude_km,
-            ) = track(t, sat, observer, downlink_frequency_mhz)
-            downlink_freq_with_doppler_hz  = (downlink_frequency_mhz * 1e6) + downlink_doppler_hz
-        
+                last_effective_antenna_tracking = effective_enable_antenna_tracking
+
             timestamp_utc = datetime.now(timezone.utc).isoformat()
             print(f" \n\n {timestamp_utc}")
             print(f"----------------> Azimuth: {az_deg:.6f} deg")
@@ -1151,12 +1459,47 @@ def main():
                 uplink_doppler_hz = downlink_doppler_hz * (uplink_frequency_mhz / downlink_frequency_mhz)
                 uplink_freq_with_doppler_hz = (uplink_frequency_mhz * 1e06) - (uplink_doppler_hz)
 
+            # Every satellite follows the same automatic elevation-based cadence.
+            # A LINEAR/FDT pass may temporarily replace it with the fixed
+            # interval selected on the FDT Console slider.
+            automatic_tracking_interval = (
+                high_elev_sleep_interval
+                if el_deg > HIGH_PASS_ELEVATION
+                else sleep_interval
+            )
+            effective_tracking_interval = automatic_tracking_interval
+            if (
+                    is_linear_satellite
+                    and fdt_enabled
+                    and fdt_recalculation_interval_override is not None):
+                effective_tracking_interval = fdt_recalculation_interval_override
+
             # Makes current pointing data available to bqe_wisp.py's web console via shared text file.
             write_status_file(
                 status_file,
                 satellite=satellite_nickname,
                 satellite_name=satellite_name,
                 satellite_type=satellite_type,
+                tuning_enabled=fdt_enabled if is_linear_satellite else enable_tuning,
+                fdt_enabled=fdt_enabled if is_linear_satellite else False,
+                fdt_recalculation_interval=(
+                    effective_tracking_interval if is_linear_satellite else None
+                ),
+                fdt_recalculation_interval_override=(
+                    fdt_recalculation_interval_override if is_linear_satellite else None
+                ),
+                fdt_cadence_mode=(
+                    "override"
+                    if is_linear_satellite and fdt_recalculation_interval_override is not None
+                    else ("auto" if is_linear_satellite else None)
+                ),
+                tracking_sleep_interval_seconds=sleep_interval,
+                tracking_sleep_interval_high_elevation_seconds=high_elev_sleep_interval,
+                high_pass_elevation=HIGH_PASS_ELEVATION,
+                tracking_cycle_interval_seconds=effective_tracking_interval,
+                enable_antenna_tracking=effective_enable_antenna_tracking,
+                configured_enable_antenna_tracking=enable_antenna_tracking,
+                antenna_tracking_override=runtime_antenna_tracking_override,
                 azimuth=az_deg,
                 elevation=el_deg,
                 downlink_doppler_hz=downlink_doppler_hz,
@@ -1176,7 +1519,8 @@ def main():
                 satellite_altitude_km=satellite_altitude_km,
                 predicted_ground_track=predicted_ground_track,
                 predicted_ground_track_count=len(predicted_ground_track),
-                message="tracking active",
+                test_pass=bool(args.test_pass),
+                message="test pass active" if args.test_pass else "tracking active",
             )
 
             if uplink_doppler_hz is not None:
@@ -1185,28 +1529,35 @@ def main():
                 print("----------------> Uplink frequency not configured for this satellite.")
      
             if el_deg > HORIZON_THRESHOLD_ELEVATION:
-                print("Satellite is above the Horizon...  Performing antenna tracking and tuning if enabled in yaml for this satellite.")
+                print("Satellite is above the Horizon...  Performing antenna tracking and any enabled radio tuning.")
                 satellite_has_risen = True # Satellite has risen - begin tracking and tuning if enabled.
 
-                if enable_tuning is True:
+                if is_linear_satellite:
+                    if fdt_enabled:
+                        print("----------------> FDT setting downlink frequency", downlink_freq_with_doppler_hz)
+                        rig.rigctld_set_downlink_frequency(downlink_freq_with_doppler_hz, rigctld_port)
+
+                        if uplink_frequency_mhz > 0:
+                            print("----------------> FDT setting uplink frequency", uplink_freq_with_doppler_hz)
+                            rig.rigctld_set_uplink_frequency(uplink_freq_with_doppler_hz, rigctld_port)
+                    else:
+                        print("----------------> LINEAR satellite: continuous Doppler tuning is disabled until Enable FDT is pressed.")
+                elif enable_tuning is True:
                     print("----------------> Setting downlink frequency", downlink_freq_with_doppler_hz)
                     rig.rigctld_set_downlink_frequency(downlink_freq_with_doppler_hz, rigctld_port)
 
-                    # Set uplink only if it was specified in yaml. (SSTV sats do not require.)   
+                    # Set uplink only if it was specified in yaml. (SSTV sats do not require.)
                     if uplink_frequency_mhz > 0:
-
-                            print("----------------> Setting uplink frequency", uplink_freq_with_doppler_hz)
-                            rig.rigctld_set_uplink_frequency(uplink_freq_with_doppler_hz, rigctld_port)
-
+                        print("----------------> Setting uplink frequency", uplink_freq_with_doppler_hz)
+                        rig.rigctld_set_uplink_frequency(uplink_freq_with_doppler_hz, rigctld_port)
                 else:
                     print("Frequency Tuning not enabled in yaml or via CLI.  Skipping...\n")
             
-                print("DEBUG] My callsign is : ", my_callsign)
-                if enable_antenna_tracking is True and my_callsign == "WB1BQE":
+                if effective_enable_antenna_tracking is True and my_callsign == "WB1BQE":
                     # Select proper antenna if not done already
                     desired_az = az_deg  # making these explicit since we may know about actual az & el at some point.
                     desired_el = el_deg
-                    desired_antenna = select_antenna(desired_az, desired_el)
+                    desired_antenna = select_antenna(desired_az, desired_el, downlink_freq_with_doppler_hz)
 
                     if desired_antenna != current_antenna:
                         do_tracking(desired_antenna, my_callsign)
@@ -1214,19 +1565,43 @@ def main():
                     else:
                         print("Antenna movement not required.  Skipping...\n")
                 else:
-                    print("Antenna Tracking is not enabled in the yaml or from the CLI for this satellite. Skipping...")
-            if el_deg > HIGH_PASS_ELEVATION:
-                    modified_sleep_interval = high_elev_sleep_interval  # At high altitudes track more frequently.
-                    print("High Pass elevation detected.  Short sleep interval selected: ", modified_sleep_interval)
+                    print("Antenna Tracking is currently disabled by configuration or the temporary Tracking-menu override. Skipping...")
+            modified_sleep_interval = effective_tracking_interval
+            if (
+                    is_linear_satellite
+                    and fdt_enabled
+                    and fdt_recalculation_interval_override is not None):
+                print(
+                    "FDT cadence override active: next Doppler calculation and radio tuning "
+                    f"update in {modified_sleep_interval:.0f} seconds."
+                )
+            elif el_deg > HIGH_PASS_ELEVATION:
+                print(
+                    "High Pass elevation detected. YAML high-elevation interval selected: ",
+                    modified_sleep_interval,
+                )
             else:
-                    modified_sleep_interval = sleep_interval
-                    print("Using normal sleep interval: ", modified_sleep_interval)
+                print("Using YAML normal tracking interval: ", modified_sleep_interval)
 
-            time.sleep(modified_sleep_interval)
+            sleep_completed = sleep_until_next_tracking_cycle(
+                modified_sleep_interval,
+                fdt_control_file=fdt_control_file,
+                stop_file=stop_file,
+                watch_for_fdt_update=(is_linear_satellite and bool(fdt_control_file)),
+                known_fdt_enabled=fdt_enabled,
+                known_fdt_timestamp=last_fdt_timestamp,
+            )
+
+            if sleep_completed is None:
+                print("Orderly stop requested by bqe_wisp; cleaning up this pass.")
+                break
+
+            if args.test_pass and sleep_completed:
+                test_pass_doppler_hz -= TEST_PASS_DOPPLER_DECREMENT_HZ
 
 
             # If the satellite has previously risen, but is now below the horizon, then cleanup and exit.
-            if el_deg < HORIZON_THRESHOLD_ELEVATION and satellite_has_risen is True:
+            if not args.test_pass and el_deg < HORIZON_THRESHOLD_ELEVATION and satellite_has_risen is True:
                 satellite_has_set = True
                 timestamp_utc = datetime.now(timezone.utc).isoformat()
                 print(f"{timestamp_utc} Satellite is below horizon - skipping radio and antenna tuning")
@@ -1239,6 +1614,11 @@ def main():
             satellite=satellite_nickname,
             satellite_name=satellite_name,
             satellite_type=satellite_type,
+            tuning_enabled=False,
+            fdt_enabled=False,
+            enable_antenna_tracking=effective_enable_antenna_tracking,
+            configured_enable_antenna_tracking=enable_antenna_tracking,
+            antenna_tracking_override=runtime_antenna_tracking_override,
             azimuth=None,
             elevation=None,
             uplink_frequency_mhz=uplink_frequency_mhz,
@@ -1265,6 +1645,12 @@ def main():
 
         stop_rigctld_process(proc)
         remove_rigctld_pid_file(rigctld_pid_file)
+
+        if stop_file:
+            try:
+                os.remove(stop_file)
+            except FileNotFoundError:
+                pass
 
 
     exit(0)

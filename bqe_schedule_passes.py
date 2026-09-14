@@ -32,7 +32,112 @@ import sys
 #import time
 import json
 import os
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import yaml  # NEW: for QTH config
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _program_settings_section(root, section_name):
+    """Return one named program_settings section from general_settings.yaml."""
+    program_settings = root.get("program_settings") if isinstance(root, dict) else None
+
+    if isinstance(program_settings, dict):
+        value = program_settings.get(section_name)
+        return value if isinstance(value, dict) else {}
+
+    if isinstance(program_settings, list):
+        for item in program_settings:
+            if not isinstance(item, dict) or section_name not in item:
+                continue
+            value = item.get(section_name)
+            return value if isinstance(value, dict) else {}
+
+    return {}
+
+
+def _parse_bool_setting(value, default=False):
+    """Accept YAML booleans plus common string forms."""
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Expected a boolean setting, not {value!r}")
+
+
+def resolve_general_settings_path():
+    """Find the project's bqe_config/general_settings.yaml file."""
+    candidates = [
+        os.path.join(SCRIPT_DIR, "bqe_config", "general_settings.yaml"),
+        os.path.join(os.path.dirname(SCRIPT_DIR), "bqe_config", "general_settings.yaml"),
+        os.path.join(os.getcwd(), "bqe_config", "general_settings.yaml"),
+        os.path.join(SCRIPT_DIR, "general_settings.yaml"),
+        os.path.join(os.getcwd(), "general_settings.yaml"),
+    ]
+
+    seen = set()
+    for candidate in candidates:
+        candidate = os.path.abspath(candidate)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.isfile(candidate):
+            return candidate
+
+    # Return the normal project location so the warning names the expected file.
+    return os.path.join(SCRIPT_DIR, "bqe_config", "general_settings.yaml")
+
+
+def load_scheduler_parallel_settings():
+    """Load multiprocessing controls for bqe_schedule_passes.
+
+    Missing settings deliberately fall back to sequential operation so older
+    general_settings.yaml files retain their previous behavior.
+    """
+    settings = {
+        "parallel_pass_generation": False,
+        "parallel_pass_workers": 4,
+    }
+    path = resolve_general_settings_path()
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            root = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        print(f"Warning: general settings file {path} not found; pass generation will remain single-process.")
+        return settings, path
+    except Exception as e:
+        print(f"Warning: could not read {path}: {e}; pass generation will remain single-process.")
+        return settings, path
+
+    section = _program_settings_section(root, "bqe_schedule_passes")
+    settings["parallel_pass_generation"] = _parse_bool_setting(
+        section.get("parallel_pass_generation"), settings["parallel_pass_generation"]
+    )
+
+    raw_workers = section.get("parallel_pass_workers", settings["parallel_pass_workers"])
+    try:
+        workers = int(raw_workers)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "general_settings.yaml setting "
+            "program_settings.bqe_schedule_passes.parallel_pass_workers "
+            f"must be an integer, not {raw_workers!r}"
+        )
+    if workers < 1:
+        raise ValueError(
+            "general_settings.yaml setting "
+            "program_settings.bqe_schedule_passes.parallel_pass_workers must be at least 1"
+        )
+    settings["parallel_pass_workers"] = workers
+    return settings, path
 
 
 def load_tle_by_name_or_id(tle_path, target):
@@ -96,20 +201,25 @@ def track(t, sat, observer, freq_mhz):
     return az_deg, alt_deg, doppler_hz, alt_deg
 
 
-def get_upcoming_passes(sat_name, nickname, sat, observer, minimum_elevation, duration_hours=48, satellite_type=""):
+def get_upcoming_passes(
+        sat_name, nickname, sat, observer, minimum_elevation, duration_hours=48,
+        satellite_type="", start_datetime_utc=None, verbose=True):
     ts = load.timescale()
-    now_utc = datetime.now(timezone.utc)
+    now_utc = start_datetime_utc or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
     start_time = ts.from_datetime(now_utc)
     end_time = ts.from_datetime(now_utc + timedelta(hours=duration_hours))
 
-    stime = datetime.now(timezone.utc)
-    ftime = stime + timedelta(hours=48)
+    stime = now_utc
+    ftime = now_utc + timedelta(hours=duration_hours)
     
     passes = []
     current_pass = None
     t = start_time
     
-    print("start/end times ", start_time, end_time)
+    if verbose:
+        print("start/end times ", start_time, end_time)
     while stime <= ftime:
         sat_pos = (sat - observer).at(t)
         altitude = sat_pos.altaz()[0].degrees
@@ -143,6 +253,118 @@ def get_upcoming_passes(sat_name, nickname, sat, observer, minimum_elevation, du
         stime += timedelta(seconds=15)
 
     return passes
+
+
+def _pass_to_ipc(pass_info):
+    """Convert Skyfield Time objects into process-safe ISO strings."""
+    item = dict(pass_info)
+    item["start"] = pass_info["start"].utc_datetime().isoformat()
+    if "end" in pass_info:
+        item["end"] = pass_info["end"].utc_datetime().isoformat()
+    return item
+
+
+def _pass_from_ipc(pass_info, timescale):
+    """Restore process-safe pass data to the Skyfield Time objects used below."""
+    item = dict(pass_info)
+    start_datetime = datetime.fromisoformat(item["start"])
+    if start_datetime.tzinfo is None:
+        start_datetime = start_datetime.replace(tzinfo=timezone.utc)
+    item["start"] = timescale.from_datetime(start_datetime)
+
+    if item.get("end"):
+        end_datetime = datetime.fromisoformat(item["end"])
+        if end_datetime.tzinfo is None:
+            end_datetime = end_datetime.replace(tzinfo=timezone.utc)
+        item["end"] = timescale.from_datetime(end_datetime)
+    else:
+        item.pop("end", None)
+    return item
+
+
+def calculate_passes_worker(task):
+    """Calculate one satellite's possible passes in a worker process.
+
+    Only primitive/picklable values cross the process boundary.  Each worker
+    creates its own Skyfield objects, then returns ISO timestamps so this works
+    with the Windows 'spawn' multiprocessing model as well as Linux.
+    """
+    ts = load.timescale()
+    observer = wgs84.latlon(
+        float(task["observer_lat_deg"]),
+        float(task["observer_lon_deg"]),
+        float(task["observer_altitude_m"]),
+    )
+    sat = EarthSatellite(
+        task["tle_line1"], task["tle_line2"], task["tle_satellite_name"], ts
+    )
+    start_datetime_utc = datetime.fromisoformat(task["start_datetime_utc"])
+    if start_datetime_utc.tzinfo is None:
+        start_datetime_utc = start_datetime_utc.replace(tzinfo=timezone.utc)
+
+    passes = get_upcoming_passes(
+        task["schedule_sat_name"],
+        task["nickname"],
+        sat,
+        observer,
+        float(task["minimum_elevation"]),
+        duration_hours=float(task.get("duration_hours", 48)),
+        satellite_type=task.get("satellite_type", ""),
+        start_datetime_utc=start_datetime_utc,
+        verbose=False,
+    )
+
+    return {
+        "label": task["label"],
+        "worker_pid": os.getpid(),
+        "passes": [_pass_to_ipc(p) for p in passes],
+    }
+
+
+def run_pass_tasks(pass_tasks, parallel_enabled, configured_workers):
+    """Run pass scans sequentially or across multiple CPU processes."""
+    combined_passes = []
+    restore_timescale = load.timescale()
+
+    if not pass_tasks:
+        return combined_passes
+
+    available_cpus = os.cpu_count() or 1
+    worker_count = min(int(configured_workers), available_cpus, len(pass_tasks))
+    use_parallel = bool(parallel_enabled) and worker_count > 1 and len(pass_tasks) > 1
+
+    if use_parallel:
+        print(
+            f"[INFO] Parallel pass generation enabled: {len(pass_tasks)} satellite(s), "
+            f"{worker_count} worker processes ({available_cpus} logical CPUs available)."
+        )
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            future_to_label = {
+                executor.submit(calculate_passes_worker, task): task["label"]
+                for task in pass_tasks
+            }
+            for future in as_completed(future_to_label):
+                label = future_to_label[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    print(f"ERROR: pass calculation failed for {label}: {e}")
+                    raise
+                restored = [_pass_from_ipc(p, restore_timescale) for p in result["passes"]]
+                combined_passes.extend(restored)
+                print(
+                    f"[INFO] Completed {label} on worker PID {result['worker_pid']}: "
+                    f"{len(restored)} qualifying pass(es)."
+                )
+    else:
+        print(f"[INFO] Pass generation is single-process for {len(pass_tasks)} satellite(s).")
+        for task in pass_tasks:
+            result = calculate_passes_worker(task)
+            restored = [_pass_from_ipc(p, restore_timescale) for p in result["passes"]]
+            combined_passes.extend(restored)
+            print(f"[INFO] Completed {task['label']}: {len(restored)} qualifying pass(es).")
+
+    return combined_passes
 
 ########################## YAML helpers #################################
 
@@ -337,16 +559,20 @@ def main():
     observer_altitude_m = args.alt if args.alt is not None else yaml_alt
 
     print(f"Using observer QTH: lat={observer_lat_deg}, lon={observer_lon_deg}, alt={observer_altitude_m} m")
-    observer = wgs84.latlon(observer_lat_deg, observer_lon_deg, observer_altitude_m)
 
+    scheduler_settings, scheduler_settings_path = load_scheduler_parallel_settings()
+    print(
+        f"Loaded scheduler parallel settings from {scheduler_settings_path}: "
+        f"parallel_pass_generation={scheduler_settings['parallel_pass_generation']}, "
+        f"parallel_pass_workers={scheduler_settings['parallel_pass_workers']}"
+    )
 
-    # --------------bqe_config/satellites.yaml nickname lookup and pass calculation---------- 
-    #   supports   --nickname  <nickname>  where nickname is defined in satellites.yaml
+    # Build lightweight work items first.  TLE/YAML lookups remain in the parent
+    # process; only the expensive 48-hour orbit scans are sent to workers.
+    pass_tasks = []
+    schedule_start_utc = datetime.now(timezone.utc)
 
-    satellite_config = None
-    satellite_name_from_cfg = None
-    satellite_catalog_number = None
-
+    # -------------- bqe_config/satellites.yaml nickname lookup ----------------
     if args.nickname:
         sat_cfg_all = auto_schedule_config if args.auto_schedule else load_satellite_config(satellites_yaml_path)
         config_source = auto_schedule_config_path if args.auto_schedule else satellites_yaml_path
@@ -363,43 +589,103 @@ def main():
             else:
                 print(f"Loaded satellite config for nickname '{nickname}': {satellite_config}")
 
-            satellite_nickname        = satellite_config.get("nickname")
-            satellite_type            = satellite_config.get("satellite_type") or ""
-            satellite_name_from_cfg   = satellite_config.get("satellite_name")  # Subkey of the nickname in the yaml
-            satellite_catalog_number  = satellite_config.get("catalog_number")
-            
-            #Purely cosmetic use to let us list satellite names in printed schedule
-            # rather than the catalog numbers that are in the generated json. 
-            if satellite_catalog_number not in dict_catalog_to_sat_name.keys():
+            satellite_type = satellite_config.get("satellite_type") or ""
+            satellite_name_from_cfg = satellite_config.get("satellite_name")
+            satellite_catalog_number = satellite_config.get("catalog_number")
+
+            # Purely cosmetic use to let us list satellite names in the printed
+            # schedule rather than catalog numbers from the generated JSON.
+            if satellite_catalog_number is not None:
                 dict_catalog_to_sat_name[satellite_catalog_number] = satellite_name_from_cfg
+                dict_catalog_to_sat_name[str(satellite_catalog_number)] = satellite_name_from_cfg
 
-            # Use catalog numbers instead of text strings, which can be unreliable and have whitespace etc.
-            if satellite_catalog_number:
-                satellite = str(satellite_catalog_number)
+            # Prefer catalog numbers for TLE matching.  If an older YAML entry
+            # has no catalog number, retain the prior name/nickname fallback.
+            satellite = str(
+                satellite_catalog_number
+                if satellite_catalog_number not in (None, "")
+                else (satellite_name_from_cfg or nickname)
+            )
 
-            print("--------- Processing nickname orbit calculations for:", satellite)
-            sat_name, tle_line1, tle_line2 = load_tle_by_name_or_id(tle_file, satellite)
-            sat = EarthSatellite(tle_line1, tle_line2, sat_name, load.timescale())
-
-            print("Getting passes for ", satellite)
-            passes = get_upcoming_passes(satellite, nickname, sat, observer, minimum_elevation, satellite_type=satellite_type)
-            for p in passes:
-                combined_passes.append(p)
+            print("--------- Preparing nickname orbit calculations for:", satellite)
+            tle_sat_name, tle_line1, tle_line2 = load_tle_by_name_or_id(tle_file, satellite)
+            pass_tasks.append({
+                "label": f"nickname {nickname}",
+                "schedule_sat_name": satellite,
+                "nickname": nickname,
+                "satellite_type": satellite_type,
+                "tle_satellite_name": tle_sat_name,
+                "tle_line1": tle_line1,
+                "tle_line2": tle_line2,
+                "observer_lat_deg": observer_lat_deg,
+                "observer_lon_deg": observer_lon_deg,
+                "observer_altitude_m": observer_altitude_m,
+                "minimum_elevation": minimum_elevation,
+                "duration_hours": 48,
+                "start_datetime_utc": schedule_start_utc.isoformat(),
+            })
 
     ########################## Sat names without nicknames ##################
-    # Calculate pass info and set nickname to "None"
     if args.sat_name:
-        for sat_name in sat_names:
-            print("--------- Processing ", sat_name)
-            sat_name, tle_line1, tle_line2 = load_tle_by_name_or_id(tle_file, sat_name)
-            sat = EarthSatellite(tle_line1, tle_line2, sat_name, load.timescale())
+        for requested_sat_name in sat_names:
+            print("--------- Preparing ", requested_sat_name)
+            tle_sat_name, tle_line1, tle_line2 = load_tle_by_name_or_id(tle_file, requested_sat_name)
+            pass_tasks.append({
+                "label": f"satellite {requested_sat_name}",
+                "schedule_sat_name": tle_sat_name,
+                "nickname": "None",
+                "satellite_type": "",
+                "tle_satellite_name": tle_sat_name,
+                "tle_line1": tle_line1,
+                "tle_line2": tle_line2,
+                "observer_lat_deg": observer_lat_deg,
+                "observer_lon_deg": observer_lon_deg,
+                "observer_altitude_m": observer_altitude_m,
+                "minimum_elevation": minimum_elevation,
+                "duration_hours": 48,
+                "start_datetime_utc": schedule_start_utc.isoformat(),
+            })
 
-            print("Getting passes for sat_name object: ", sat_name)
-            passes = get_upcoming_passes(sat_name, "None", sat, observer, minimum_elevation, satellite_type="")
-            for p in passes:
-                combined_passes.append(p)
+    # Per the requested policy, parallelization is considered only when
+    # auto_schedule is active or more than three nicknames were supplied.
+    parallel_triggered = bool(args.auto_schedule or len(nicknames) > 3)
+    parallel_enabled = bool(
+        scheduler_settings["parallel_pass_generation"] and parallel_triggered
+    )
 
-   
+    if scheduler_settings["parallel_pass_generation"] and not parallel_triggered:
+        print(
+            "[INFO] Parallel pass generation is enabled in general_settings.yaml, "
+            "but this run has three or fewer nicknames and is not --auto_schedule; "
+            "using one process."
+        )
+    elif parallel_triggered and not scheduler_settings["parallel_pass_generation"]:
+        print(
+            "[INFO] This run qualifies for parallel pass generation, but it is "
+            "disabled in general_settings.yaml; using one process."
+        )
+
+    # Report the effective scheduling mode before beginning the orbit scans.
+    available_cpus = os.cpu_count() or 1
+    effective_worker_count = min(
+        int(scheduler_settings["parallel_pass_workers"]),
+        available_cpus,
+        max(1, len(pass_tasks)),
+    )
+    if parallel_enabled and effective_worker_count > 1 and len(pass_tasks) > 1:
+        print(
+            f"[INFO] Parallel pass scheduling is ENABLED; "
+            f"using {effective_worker_count} worker processes."
+        )
+    else:
+        print("[INFO] Parallel pass scheduling is DISABLED; using one process.")
+
+    combined_passes = run_pass_tasks(
+        pass_tasks,
+        parallel_enabled=parallel_enabled,
+        configured_workers=scheduler_settings["parallel_pass_workers"],
+    )
+
 
     # Sort combined_passes by 'start' timestamp
     combined_passes.sort(key=lambda p: p['start'].utc_datetime())
@@ -474,6 +760,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # Required for safe ProcessPoolExecutor startup on Windows; harmless on Linux.
+    multiprocessing.freeze_support()
     main()
 
 
