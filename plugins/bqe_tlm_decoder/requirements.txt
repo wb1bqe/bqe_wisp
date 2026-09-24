@@ -1,0 +1,5 @@
+numpy>=1.24,<3
+scipy>=1.10,<2
+SoundCard>=0.4,<1
+soundfile>=0.12,<1
+reedsolo>=1.7,<2
