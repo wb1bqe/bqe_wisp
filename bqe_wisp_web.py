@@ -541,11 +541,24 @@ def _general_settings_editor_response(message: str = "") -> dict[str, Any]:
 
     rows = []
     for key in ordered_keys:
+        current_present = key in current_values
+        original_present = key in original_values
         current_value = current_values.get(key, original_values.get(key, ""))
+        original_value = original_values.get(key, "")
+        current_text = _general_setting_value_to_text(current_value)
+        original_text = _general_setting_value_to_text(original_value)
         rows.append({
             "key": key,
-            "current": _general_setting_value_to_text(current_value),
-            "original": _general_setting_value_to_text(original_values.get(key, "")),
+            "current": current_text,
+            "original": original_text,
+            "current_present": current_present,
+            "original_present": original_present,
+            # A presence mismatch is also a real configuration difference, even
+            # when the editor seeds a missing current value from the template.
+            "different": (
+                current_present != original_present
+                or (current_present and original_present and current_text != original_text)
+            ),
         })
 
     if not rows:
@@ -999,6 +1012,129 @@ def read_create_preset_payload() -> Mapping[str, Any]:
         return {"ok": False, "message": f"Could not read idle-task preset template: {exc}"}
 
 
+def _list_editable_preset_files() -> list[Path]:
+    """Return top-level YAML preset files without following entries outside presets/."""
+    if not PRESETS_DIR.is_dir():
+        return []
+
+    presets_root = PRESETS_DIR.resolve()
+    preset_files = []
+    for candidate in PRESETS_DIR.iterdir():
+        if not candidate.is_file() or candidate.suffix.casefold() not in {".yaml", ".yml"}:
+            continue
+        try:
+            resolved_candidate = candidate.resolve()
+            if resolved_candidate.parent != presets_root:
+                continue
+        except OSError:
+            continue
+        preset_files.append(candidate)
+    return sorted(preset_files, key=lambda path: path.name.casefold())
+
+
+def _resolve_existing_preset_file(filename: Any) -> Path:
+    """Resolve one existing top-level preset YAML file by its exact filename."""
+    requested_name = "" if filename is None else str(filename).strip()
+    if not requested_name:
+        raise ValueError("Select a preset file.")
+    if Path(requested_name).name != requested_name or "/" in requested_name or "\\" in requested_name:
+        raise ValueError("Preset filename must be a filename only, not a path.")
+    if Path(requested_name).suffix.casefold() not in {".yaml", ".yml"}:
+        raise ValueError("Preset filename must end in .yaml or .yml.")
+
+    available = {path.name: path for path in _list_editable_preset_files()}
+    preset_path = available.get(requested_name)
+    if preset_path is None:
+        raise FileNotFoundError(f"Preset {requested_name!r} was not found in {PRESETS_DIR}.")
+    return preset_path
+
+
+def _read_preset_yaml(path: Path) -> dict[str, Any]:
+    """Read one preset and require the same top-level mapping used by QTH editing."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{path} must contain a YAML mapping at the top level.")
+    return dict(raw)
+
+
+def _infer_preset_value_type(text_value: Any, previous_value: Any = None) -> Any:
+    """Preserve quoted/string preset values such as frequency_hz and bandwidth."""
+    if isinstance(previous_value, str):
+        return "" if text_value is None else str(text_value).strip()
+    return _infer_qth_value_type(text_value, previous_value)
+
+
+def _edit_preset_response(filename: Any = "", message: str = "") -> dict[str, Any]:
+    """Build the Config > Edit existing Preset selector and editor payload."""
+    preset_files = _list_editable_preset_files()
+    filenames = [path.name for path in preset_files]
+    if not filenames:
+        return {
+            "ok": True,
+            "presets_path": str(PRESETS_DIR),
+            "files": [],
+            "filename": "",
+            "data": {},
+            "message": message or f"No preset YAML files were found in {PRESETS_DIR}.",
+        }
+
+    selected_name = str(filename or "").strip() or filenames[0]
+    preset_path = _resolve_existing_preset_file(selected_name)
+    preset_data = _read_preset_yaml(preset_path)
+    if not preset_data:
+        preset_data = {name: "" for name in PRESET_DEFAULT_FIELDS}
+    editable = {str(key): _qth_value_to_text(value) for key, value in preset_data.items()}
+    return {
+        "ok": True,
+        "presets_path": str(PRESETS_DIR),
+        "path": str(preset_path),
+        "files": filenames,
+        "filename": preset_path.name,
+        "data": editable,
+        "message": message or f"Loaded preset from {preset_path}.",
+    }
+
+
+def read_edit_preset_payload(filename: Any = "") -> Mapping[str, Any]:
+    """Return a selected preset YAML file for the browser editor."""
+    try:
+        return _edit_preset_response(filename)
+    except Exception as exc:
+        return {"ok": False, "message": f"Could not read preset: {exc}"}
+
+
+def write_edit_preset_payload(request_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Update one existing YAML preset under presets/ after validation."""
+    try:
+        preset_path = _resolve_existing_preset_file(request_payload.get("filename", ""))
+        edited_data = request_payload.get("data", {})
+        if not isinstance(edited_data, Mapping):
+            return {"ok": False, "message": "Preset save request did not contain a data mapping."}
+
+        existing_data = _read_preset_yaml(preset_path)
+        updated_data = dict(existing_data)
+        for key, value in edited_data.items():
+            key_text = str(key).strip()
+            if not key_text:
+                continue
+            updated_data[key_text] = _infer_preset_value_type(value, existing_data.get(key_text))
+
+        temporary_path = preset_path.with_suffix(preset_path.suffix + ".tmp")
+        temporary_path.write_text(
+            yaml.safe_dump(updated_data, sort_keys=False, default_flow_style=False),
+            encoding="utf-8",
+        )
+        temporary_path.replace(preset_path)
+        return _edit_preset_response(
+            preset_path.name,
+            f"Saved preset to {preset_path}.",
+        )
+    except Exception as exc:
+        return {"ok": False, "message": f"Could not save preset: {exc}"}
+
+
 def read_license_payload() -> Mapping[str, Any]:
     """Read license.txt from the program directory for the Help dialog."""
     try:
@@ -1387,7 +1523,8 @@ def build_recordings_html(
             'data-name="{attribute_name}" aria-label="Select {attribute_name} for Morse decoding">'
             '<button type="button" class="play-button" data-url="{url}" '
             'data-name="{attribute_name}">Play</button></td>'
-            '<td><a href="{url}" target="_blank" rel="noopener">{name}</a></td>'
+            '<td><a href="{url}" class="recording-link" data-url="{url}" '
+            'data-name="{attribute_name}">{name}</a></td>'
             '<td>{modified}</td><td>{size}</td>'
             '<td class="morse-result" data-morse-result>Not analyzed</td></tr>'.format(
                 sort_name=html.escape(recording_path.name.casefold(), quote=True),
@@ -2172,11 +2309,14 @@ def build_recordings_html(
 
     function cleanMorseMask(mask, frameSeconds) {
       const cleaned = mask.slice();
-      const shortRunFrames = Math.max(1, Math.floor(0.045 / frameSeconds));
+      // A retune can briefly interrupt a mark. Bridge those short gaps without
+      // deleting equally short dots at higher keying speeds.
+      const shortRunFrames = Math.max(1, Math.floor(0.008 / frameSeconds));
+      const shortGapFrames = Math.max(1, Math.floor(0.024 / frameSeconds));
       for (let pass = 0; pass < 2; pass += 1) {
         let runs = maskRuns(cleaned);
         runs.forEach((run, index) => {
-          if (!run.active && index > 0 && index < runs.length - 1 && run.length <= shortRunFrames) {
+          if (!run.active && index > 0 && index < runs.length - 1 && run.length <= shortGapFrames) {
             cleaned.fill(1, run.start, run.start + run.length);
           }
         });
@@ -2236,11 +2376,11 @@ def build_recordings_html(
       // Each short frame searches the entire CW audio band for a narrow peak.
       // No fixed pitch is assumed, so a Doppler-shifted tone can move freely
       // between frames while its keyed timing remains intact.
-      const fftSize = 256;
+      const fftSize = 128;
       const nativeRate = buffer.sampleRate;
       const stride = Math.max(1, Math.round(nativeRate / 8000));
       const analysisRate = nativeRate / stride;
-      const requestedHopSeconds = Math.max(0.016, duration / 70000);
+      const requestedHopSeconds = Math.max(0.008, duration / 140000);
       const frameCount = Math.max(1, Math.ceil(duration / requestedHopSeconds));
       const frameSeconds = duration / frameCount;
       const channels = [];
@@ -2252,18 +2392,27 @@ def build_recordings_html(
       for (let index = 0; index < fftSize; index += 1) {
         windowValues[index] = 0.5 - 0.5 * Math.cos(2 * Math.PI * index / (fftSize - 1));
       }
-      const firstBin = Math.max(1, Math.ceil(180 * fftSize / analysisRate));
-      const lastBin = Math.min(fftSize / 2 - 1, Math.floor(2400 * fftSize / analysisRate));
+      // Include guard bins for the three-bin energy measurement at each edge.
+      const firstBin = Math.max(0, Math.ceil(120 * fftSize / analysisRate) - 1);
+      const lastBin = Math.min(fftSize / 2 - 1, Math.floor(3400 * fftSize / analysisRate) + 1);
       const bandBinCount = lastBin - firstBin + 1;
       if (bandBinCount < 8) throw new Error('The decoded sample rate is too low for Morse analysis.');
 
       const real = new Float64Array(fftSize);
       const imaginary = new Float64Array(fftSize);
       const bandPowers = new Float64Array(bandBinCount);
-      const noiseScratch = new Float64Array(bandBinCount);
+      const noisePowers = new Float64Array(bandBinCount);
       const prominenceDb = new Float32Array(frameCount);
       const peakFrequencies = new Float32Array(frameCount);
+      const temporalProminence = new Float32Array(frameCount);
+      const temporalScores = new Float32Array(frameCount * bandBinCount);
+      const spectralPowers = new Float32Array(frameCount * bandBinCount);
+      // Bounded by the frame cap (about 70 MB total spectral working storage
+      // at 8 kHz). No recording-sized JavaScript object graph is created.
+      const carrierMask = new Uint8Array(frameCount * bandBinCount);
       const epsilon = 1e-20;
+      const noiseFall = 1 - Math.exp(-frameSeconds / 0.1);
+      const noiseRise = 1 - Math.exp(-frameSeconds / 2);
 
       for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
         const centerSample = Math.floor(((frameIndex + 0.5) / frameCount) * buffer.length);
@@ -2280,28 +2429,141 @@ def build_recordings_html(
         }
         fftInPlace(real, imaginary);
 
-        let maximumPower = 0;
-        let maximumBin = firstBin;
         for (let bin = firstBin; bin <= lastBin; bin += 1) {
           const power = real[bin] * real[bin] + imaginary[bin] * imaginary[bin] + epsilon;
-          bandPowers[bin - firstBin] = power;
-          if (power > maximumPower) {
-            maximumPower = power;
-            maximumBin = bin;
+          const slot = bin - firstBin;
+          bandPowers[slot] = power;
+          spectralPowers[frameIndex * bandBinCount + slot] = power;
+          if (frameIndex === 0) noisePowers[slot] = power;
+          else {
+            // Follow key-up noise quickly, but limit how much a keyed tone
+            // can raise its own noise estimate. Use elapsed time so long-file
+            // frame limits do not change the estimator's time constants.
+            const previous = noisePowers[slot];
+            noisePowers[slot] += power < previous
+              ? noiseFall * (power - previous)
+              : noiseRise * (Math.min(power, previous * 4) - previous);
           }
         }
-        noiseScratch.set(bandPowers);
-        noiseScratch.sort();
-        const middle = Math.floor(noiseScratch.length / 2);
-        const noisePower = noiseScratch.length % 2
-          ? noiseScratch[middle]
-          : (noiseScratch[middle - 1] + noiseScratch[middle]) / 2;
-        prominenceDb[frameIndex] = 10 * Math.log10(maximumPower / Math.max(epsilon, noisePower));
-        peakFrequencies[frameIndex] = maximumBin * analysisRate / fftSize;
+        // Measure narrowband contrast against nearby noise, and retain a
+        // separate key-up noise reference for frames straddling a retune.
+        for (let bin = 1; bin < bandBinCount - 1; bin += 1) {
+          const noise = (noisePowers[bin - 1] + noisePowers[bin] + noisePowers[bin + 1]) / 3;
+          const peak = (bandPowers[bin - 1] + bandPowers[bin] + bandPowers[bin + 1]) / 3;
+          let nearbyNoise = 0;
+          let neighbors = 0;
+          for (let offset = -8; offset <= 8; offset += 1) {
+            const other = bin + offset;
+            if (Math.abs(offset) <= 2 || other < 0 || other >= bandBinCount) continue;
+            const value = bandPowers[other];
+            nearbyNoise += value;
+            neighbors += 1;
+          }
+          const contrast = peak / Math.max(epsilon,
+            nearbyNoise / neighbors);
+          const slot = frameIndex * bandBinCount + bin;
+          // 1 = strongly tonal; the persistence pass upgrades birdies to 2.
+          carrierMask[slot] = contrast >= 10 ? 1 : 0;
+          // Compensate for the deliberately low-biased noise tracker.
+          temporalScores[slot] = 10 * Math.log10(Math.max(1, peak / Math.max(epsilon, 3 * noise)));
+        }
 
         if (frameIndex % 400 === 0) {
-          progressCallback(Math.round(100 * frameIndex / frameCount));
+          progressCallback(Math.round(70 * frameIndex / frameCount));
           await new Promise(resolve => window.setTimeout(resolve, 0));
+        }
+      }
+
+      // Remove sustained spectral ridges before choosing a peak, so a
+      // stronger unkeyed birdie cannot hide a weaker keyed signal. A retune
+      // starts a new ridge, and the whole persistent run is suppressed.
+      const carrierFrames = Math.ceil(0.65 / frameSeconds);
+      for (let bin = 1; bin < bandBinCount - 1; bin += 1) {
+        let start = -1;
+        let last = -1;
+        for (let frame = 0; frame <= frameCount; frame += 1) {
+          const present = frame < frameCount &&
+            carrierMask[frame * bandBinCount + bin] === 1;
+          if (present) {
+            if (start < 0) start = frame;
+            last = frame;
+          }
+          // Do not bridge key-up gaps in this pass: five dashes must not be
+          // mistaken for one continuous carrier.
+          if (start >= 0 && !present) {
+            if (last - start + 1 >= carrierFrames) {
+              for (let k = start; k <= last; k += 1) carrierMask[k * bandBinCount + bin] = 2;
+            }
+            start = -1;
+          }
+        }
+        if (bin % 12 === 0) {
+          progressCallback(70 + Math.round(15 * bin / bandBinCount));
+          await new Promise(resolve => window.setTimeout(resolve, 0));
+        }
+      }
+      // Mask the window's neighboring bins and edge frames as well, so
+      // leakage at a birdie retune does not masquerade as a short CW mark.
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        for (let bin = 1; bin < bandBinCount - 1; bin += 1) {
+          if (carrierMask[frame * bandBinCount + bin] !== 2) continue;
+          for (let f = Math.max(0, frame - 2); f <= Math.min(frameCount - 1, frame + 2); f += 1) {
+            for (let b = bin - 1; b <= bin + 1; b += 1) {
+              const slot = f * bandBinCount + b;
+              if (carrierMask[slot] < 2) carrierMask[slot] = 3;
+            }
+          }
+        }
+      }
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        let best = 0;
+        let selected = 0;
+        const offset = frame * bandBinCount;
+        let maximum = 0;
+        for (let bin = 1; bin < bandBinCount - 1; bin += 1) {
+          const slot = offset + bin;
+          if (carrierMask[slot] < 2 && spectralPowers[slot] >= spectralPowers[slot - 1] &&
+              spectralPowers[slot] >= spectralPowers[slot + 1]) {
+            maximum = Math.max(maximum, spectralPowers[slot]);
+          }
+        }
+        for (let bin = 1; bin < bandBinCount - 1; bin += 1) {
+          const slot = offset + bin;
+          if (carrierMask[slot] >= 2 || spectralPowers[slot] < maximum * 0.1 ||
+              spectralPowers[slot] < spectralPowers[slot - 1] ||
+              spectralPowers[slot] < spectralPowers[slot + 1]) continue;
+          let noise = 0;
+          let count = 0;
+          for (let delta = -8; delta <= 8; delta += 1) {
+            const neighbor = bin + delta;
+            if (Math.abs(delta) <= 2 || neighbor < 0 || neighbor >= bandBinCount ||
+                carrierMask[offset + neighbor] >= 2) continue;
+            noise += spectralPowers[offset + neighbor];
+            count += 1;
+          }
+          if (count < 4) continue;
+          const peak = (spectralPowers[slot - 1] + spectralPowers[slot] + spectralPowers[slot + 1]) / 3;
+          const score = 10 * Math.log10(Math.max(1, peak / Math.max(epsilon, noise / count)));
+          if (score > best) { best = score; selected = bin; }
+        }
+        prominenceDb[frame] = best;
+        temporalProminence[frame] = temporalScores[offset + selected];
+        peakFrequencies[frame] = (selected + firstBin) * analysisRate / fftSize;
+        if (frame % 4000 === 0) {
+          progressCallback(85 + Math.round(5 * frame / frameCount));
+          await new Promise(resolve => window.setTimeout(resolve, 0));
+        }
+      }
+      progressCallback(90);
+
+      // At a large, well-supported pitch jump, spectral spreading can look
+      // like key-up. Consult the temporal reference only around that jump;
+      // do not let ordinary noise peaks create marks across the recording.
+      for (let i = 1; i < frameCount; i += 1) {
+        if (Math.abs(peakFrequencies[i] - peakFrequencies[i - 1]) < 500 ||
+            temporalProminence[i] < 30 || temporalProminence[i - 1] < 30) continue;
+        for (let j = Math.max(0, i - 2); j <= Math.min(frameCount - 1, i + 2); j += 1) {
+          prominenceDb[j] = Math.max(prominenceDb[j], temporalProminence[j]);
         }
       }
 
@@ -2314,16 +2576,28 @@ def build_recordings_html(
       // Re-estimate the on/off threshold in short blocks. This follows fading
       // and changing receiver noise while the wide-band peak search follows Doppler.
       const rawMask = new Uint8Array(frameCount);
-      const blockFrames = Math.max(80, Math.round(10 / frameSeconds));
-      const requiredLocalSeparation = Math.max(5.5, globalSeparation * 0.34);
+      const blockFrames = Math.max(1, Math.round(0.25 / frameSeconds));
+      const contextFrames = Math.round(0.75 / frameSeconds);
+      let hasKeying = false;
+      const gateFrames = Math.round(5 / frameSeconds);
       for (let start = 0; start < frameCount; start += blockFrames) {
         const end = Math.min(frameCount, start + blockFrames);
-        const localValues = prominenceDb.slice(start, end);
-        const localClusters = twoMeans(localValues);
-        const localSeparation = localClusters.high - localClusters.low;
-        if (localSeparation < requiredLocalSeparation ||
-            localClusters.high < globalClusters.low + 4.0) continue;
-        const threshold = (localClusters.low + localClusters.high) / 2;
+        if (start % (4 * blockFrames) === 0) {
+          // This coarse gate only identifies keyed stretches, so subsample
+          // its statistics instead of repeatedly sorting every audio frame.
+          const gateValues = [];
+          for (let i = Math.max(0, start - gateFrames);
+               i < Math.min(frameCount, start + gateFrames); i += 4) {
+            gateValues.push(prominenceDb[i]);
+          }
+          const clusters = twoMeans(gateValues);
+          hasKeying = clusters.high - clusters.low >= 6 && clusters.high >= 16;
+        }
+        if (!hasKeying) continue;
+        const localValues = prominenceDb.slice(Math.max(0, start - contextFrames),
+          Math.min(frameCount, end + contextFrames));
+        const high = percentile(localValues, 0.85);
+        const threshold = Math.max(12, high - 10);
         for (let index = start; index < end; index += 1) {
           if (prominenceDb[index] >= threshold) rawMask[index] = 1;
         }
@@ -2334,24 +2608,43 @@ def build_recordings_html(
       const pulseDurations = runs
         .filter(run => run.active)
         .map(run => run.length * frameSeconds)
-        .filter(value => value >= Math.max(0.035, frameSeconds) && value <= 0.65);
+        .filter(value => value >= Math.max(0.012, frameSeconds) && value <= 0.65);
       if (pulseDurations.length < 8) {
         throw new Error('Too few regularly keyed pulses were found to decode Morse.');
       }
 
       const pulseClusters = twoMeans(pulseDurations, 0.25, 0.75);
-      let dotSeconds = pulseClusters.low;
-      if (pulseClusters.high / Math.max(0.001, pulseClusters.low) < 1.65) {
-        dotSeconds = percentile(pulseDurations, 0.25);
+      const clusterBoundary = (pulseClusters.low + pulseClusters.high) / 2;
+      // Fade fragments and unrelated bursts should not move the speed of
+      // an otherwise regular beacon. Fit the central part of each cluster.
+      const trimmedMean = values => {
+        const low = percentile(values, 0.2);
+        const high = percentile(values, 0.8);
+        const central = values.filter(value => value >= low && value <= high);
+        return central.length ? central.reduce((sum, value) => sum + value, 0) / central.length : median(values);
+      };
+      const shortPulses = pulseDurations.filter(value => value <= clusterBoundary);
+      const longPulses = pulseDurations.filter(value => value > clusterBoundary);
+      if (shortPulses.length && longPulses.length) {
+        pulseClusters.low = trimmedMean(shortPulses);
+        pulseClusters.high = trimmedMean(longPulses);
       }
+      const separatedPulses = pulseClusters.high / Math.max(0.001, pulseClusters.low) >= 1.65;
+      // The analysis window and threshold shorten marks and lengthen spaces
+      // (or vice versa). Fit that common bias as well as the keying speed.
+      const dotSeconds = separatedPulses
+        ? (pulseClusters.high - pulseClusters.low) / 2
+        : percentile(pulseDurations, 0.25);
+      const keyingBias = separatedPulses
+        ? clamp(pulseClusters.low - dotSeconds, -0.5 * dotSeconds, 0.5 * dotSeconds) : 0;
       if (dotSeconds < 0.025 || dotSeconds > 0.50) {
         throw new Error('Keying pulses were found, but their timing does not resemble Morse code.');
       }
 
-      const pulseBoundary = 2.0 * dotSeconds;
-      const characterGapBoundary = 2.0 * dotSeconds;
-      const wordGapBoundary = 5.0 * dotSeconds;
-      const minimumPulse = Math.max(frameSeconds, 0.45 * dotSeconds);
+      const pulseBoundary = 2.0 * dotSeconds + keyingBias;
+      const characterGapBoundary = 2.0 * dotSeconds - keyingBias;
+      const wordGapBoundary = 5.0 * dotSeconds - keyingBias;
+      const minimumPulse = Math.max(frameSeconds, 0.30 * dotSeconds);
       const decoded = [];
       const timingErrors = [];
       let currentPattern = '';
@@ -2372,11 +2665,17 @@ def build_recordings_html(
         const runSeconds = run.length * frameSeconds;
         if (run.active) {
           if (runSeconds < minimumPulse) return;
+          if (runSeconds > Math.max(0.65, 5 * dotSeconds)) {
+            // A sustained carrier cannot be a dash at the measured speed.
+            finishCharacter();
+            if (decoded.length && decoded[decoded.length - 1] !== ' ') decoded.push(' ');
+            return;
+          }
           const dash = runSeconds >= pulseBoundary;
           currentPattern += dash ? '-' : '.';
           pulseCount += 1;
           const expectedUnits = dash ? 3 : 1;
-          timingErrors.push(Math.abs(runSeconds / dotSeconds - expectedUnits) / expectedUnits);
+          timingErrors.push(Math.abs((runSeconds - keyingBias) / dotSeconds - expectedUnits) / expectedUnits);
           return;
         }
         if (!currentPattern) return;
@@ -2407,6 +2706,7 @@ def build_recordings_html(
         0.42 * knownFraction + 0.33 * timingScore + 0.25 * separationScore
       ));
       const repeatedCandidate = repeatedMorseCandidate(text);
+      progressCallback(100);
 
       return {
         text,
@@ -2443,7 +2743,7 @@ def build_recordings_html(
       metadata.className = 'morse-result-meta';
       metadata.textContent = `Estimated ${result.wordsPerMinute.toFixed(1)} WPM; ` +
         `tone ${result.minimumFrequency}–${result.maximumFrequency} Hz; ` +
-        `${result.pulseCount} pulses; ${result.confidence}% signal/timing confidence.`;
+        `${result.pulseCount} pulses; signal/timing score ${result.confidence}/100 (not text accuracy).`;
       details.appendChild(metadata);
 
       if (result.repeatedCandidate) {
@@ -2571,8 +2871,14 @@ def build_recordings_html(
       analyzeRecording(url, generation);
     }
 
-    document.querySelectorAll('.play-button').forEach(button => {
-      button.addEventListener('click', () => selectRecording(button));
+    document.querySelectorAll('.play-button, .recording-link').forEach(control => {
+      control.addEventListener('click', event => {
+        // Play filename links here, preserving the recording list and decode
+        // results. Modified clicks still allow opening the MP3 separately.
+        if (control.matches('a') && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
+        event.preventDefault();
+        selectRecording(control);
+      });
     });
 
     document.querySelectorAll('.morse-checkbox').forEach(checkbox => {
@@ -3249,6 +3555,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     body.detached-fdt-mode #licenseModal,
     body.detached-fdt-mode #qthModal,
     body.detached-fdt-mode #radioModal,
+    body.detached-fdt-mode #editPresetModal,
     body.detached-fdt-mode #presetModal,
     body.detached-fdt-mode #testPassModal,
     body.detached-fdt-mode #customScheduleModal {
@@ -3319,6 +3626,34 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     .status-details {
       flex: 0 0 auto;
       min-width: 0;
+    }
+    .recording-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 12px;
+      border: 1px solid #168aff;
+      border-radius: 6px;
+      background: #082c54;
+      color: #d7edff;
+      font: bold 15px Arial, sans-serif;
+      white-space: nowrap;
+    }
+    .recording-indicator[hidden] { display: none; }
+    .recording-light {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: #249fff;
+      box-shadow: 0 0 9px #249fff;
+      animation: bqe-recording-flash 1.2s ease-in-out infinite;
+    }
+    @keyframes bqe-recording-flash {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .recording-light { animation: none; }
     }
     .status-grid {
       display: grid;
@@ -3696,6 +4031,18 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       font-family: "Courier New", Consolas, monospace;
       font-size: 15px;
       font-weight: 900;
+    }
+    /* Current-vs-template differences are intentionally conspicuous in both
+       classic and modern themes.  Apply the class to the key, both values, and
+       the editable Current input so the whole comparison is easy to scan. */
+    .general-settings-different {
+      color: #ffd400 !important;
+      font-weight: 900 !important;
+      text-shadow: 0 0 1px rgba(0,0,0,.85);
+    }
+    .general-settings-table input.general-settings-different {
+      color: #ffe45e !important;
+      font-weight: 900 !important;
     }
     #satellitesEditorModal .config-box {
       width: min(1180px, calc(100vw - 36px));
@@ -4525,11 +4872,27 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       border-right-color: #31546b;
       border-bottom-color: #29495e;
     }
+    /* Normal Current values use the standard Modern UI text color.  Yellow is
+       reserved exclusively for settings that differ from the template. */
     body.modern-ui .general-settings-table input {
       background: #07131c;
-      color: #ffe86b;
+      color: #d6e8f3;
       border-color: #466d86;
-      caret-color: #ffe86b;
+      caret-color: #d6e8f3;
+    }
+
+    /* Yellow is reserved exclusively for the key/value text of rows whose
+       Current and Original values differ.  JavaScript also applies the text
+       color directly so later theme rules cannot mask the indication. */
+    body.modern-ui #generalSettingsTable .general-settings-different {
+      color: #ffe45e !important;
+      font-weight: 900 !important;
+      text-shadow: 0 0 1px rgba(0,0,0,.85);
+    }
+    body.modern-ui #generalSettingsTable input.general-settings-different {
+      color: #ffe45e !important;
+      caret-color: #d6e8f3;
+      font-weight: 900 !important;
     }
     body.modern-ui #customScheduleMessage.custom-schedule-error { color: #ff91a8; }
     body.modern-ui .about-line {
@@ -4699,6 +5062,31 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       height: auto;
       min-height: 0 !important;
     }
+
+    /* General-settings comparison: normal Current values use the standard
+       theme text color.  Yellow is reserved ONLY for an actual difference. */
+    body.modern-ui #generalSettingsTable input:not(.general-settings-different) {
+      color: #d6e8f3 !important;
+      caret-color: #d6e8f3 !important;
+      -webkit-text-fill-color: #d6e8f3 !important;
+    }
+
+    /* Difference indication: only the key text and the two value texts turn
+       bold yellow.  Do not change row/cell backgrounds or borders. */
+    #generalSettingsTable .general-settings-key.general-settings-different,
+    #generalSettingsTable .general-settings-original.general-settings-different,
+    body.modern-ui #generalSettingsTable .general-settings-key.general-settings-different,
+    body.modern-ui #generalSettingsTable .general-settings-original.general-settings-different {
+      color: #ffe45e !important;
+      font-weight: 900 !important;
+      text-shadow: 0 0 1px rgba(0,0,0,.85) !important;
+    }
+    #generalSettingsTable input.general-settings-different,
+    body.modern-ui #generalSettingsTable input.general-settings-different {
+      color: #ffe45e !important;
+      -webkit-text-fill-color: #ffe45e !important;
+      font-weight: 900 !important;
+    }
   </style>
 </head>
 <body class="__BQE_UI_THEME__-ui" data-bqe-ui-build="vivid-modern-ui-20260825">
@@ -4714,6 +5102,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Sound-card audio">Audio</button>
       <div class="submenu" role="menu" aria-label="Audio menu">
         <button type="button" role="menuitemcheckbox" aria-checked="false" id="streamAudioMenuItem">Stream Audio</button>
+        <button type="button" role="menuitem" id="recordAudioMenuItem" disabled>Record Audio</button>
       </div>
     </div>
     <div class="menu view-menu" role="none">
@@ -4732,7 +5121,13 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       <div class="submenu config-submenu" role="menu" aria-label="Config menu">
         <button type="button" role="menuitem" id="configQthMenuItem">QTH</button>
         <button type="button" role="menuitem" id="configRadioMenuItem">Radio</button>
-        <button type="button" role="menuitem" id="configCreatePresetMenuItem">Create Preset</button>
+        <div class="submenu-group" role="none">
+          <button type="button" role="menuitem" id="configPresetsMenuItem" aria-haspopup="true" aria-expanded="false">Presets</button>
+          <div class="submenu nested-submenu" role="menu" aria-label="Preset configuration menu">
+            <button type="button" role="menuitem" id="configCreatePresetMenuItem">Create Preset</button>
+            <button type="button" role="menuitem" id="configEditPresetMenuItem">Edit existing Preset</button>
+          </div>
+        </div>
         <div class="submenu-group" role="none">
           <button type="button" role="menuitem" id="configAdvancedMenuItem" aria-haspopup="true" aria-expanded="false">Advanced</button>
           <div class="submenu nested-submenu" role="menu" aria-label="Advanced configuration menu">
@@ -4768,6 +5163,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     <div class="menu help-menu" role="none">
       <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Help">Help</button>
       <div class="submenu" role="menu" aria-label="Help menu">
+        <button type="button" role="menuitem" id="environmentDiagnosticsMenuItem">Perform Environment Diagnostics</button>
         <button type="button" role="menuitem" id="licenseMenuItem">Show License</button>
         <button type="button" role="menuitem" id="aboutMenuItem">About</button>
       </div>
@@ -4783,6 +5179,15 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     </div>
   </div>
 
+  <dialog id="environmentDiagnosticsDialog" aria-labelledby="environmentDiagnosticsTitle" style="width:min(850px,90vw);max-height:85vh;padding:24px;border:1px solid #5384a5;border-radius:16px;background:#102538;color:#edf6ff;box-shadow:0 24px 80px #0009;">
+    <h2 id="environmentDiagnosticsTitle" style="margin:0 0 8px">Environment Diagnostics</h2>
+    <p id="environmentDiagnosticsSummary" role="status" style="color:#b9d9ef">Checking the server environment…</p>
+    <div id="environmentDiagnosticsResults" tabindex="0" style="max-height:52vh;overflow:auto;background:#091825;border-radius:10px;padding:16px;font:13px/1.65 monospace;white-space:pre-wrap;overflow-wrap:anywhere;"></div>
+    <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:18px">
+      <button type="button" id="environmentDiagnosticsSave" disabled>Save as Text</button>
+      <button type="button" id="environmentDiagnosticsClose">Close</button>
+    </div>
+  </dialog>
   <div class="config-modal" id="licenseModal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="licenseTitle">
     <div class="license-box panel">
       <div class="config-title" id="licenseTitle">BQE WISP License</div>
@@ -4901,6 +5306,27 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
           <button type="button" id="presetCancelButton">Cancel</button>
         </div>
         <div class="config-message" id="presetMessage"></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="config-modal" id="editPresetModal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="editPresetTitle">
+    <div class="config-box panel">
+      <button class="config-close" type="button" id="editPresetClose" aria-label="Close Edit existing Preset dialog">&times;</button>
+      <div class="config-title" id="editPresetTitle">Edit existing Preset</div>
+      <form id="editPresetForm">
+        <div class="config-fields">
+          <label for="editPresetSelect">Preset file</label>
+          <select id="editPresetSelect" aria-label="Preset file"></select>
+        </div>
+        <div class="config-fields" id="editPresetFields">
+          <label>Loading</label><input type="text" value="" disabled>
+        </div>
+        <div class="config-actions">
+          <button type="submit" id="editPresetSaveButton">Save</button>
+          <button type="button" id="editPresetCancelButton">Cancel</button>
+        </div>
+        <div class="config-message" id="editPresetMessage" aria-live="polite"></div>
       </form>
     </div>
   </div>
@@ -5130,6 +5556,10 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
     <section class="statusbar panel">
       <div class="statusbar-main">
+        <div class="recording-indicator" id="audioRecordingIndicator" role="status" hidden>
+          <span class="recording-light" aria-hidden="true"></span>
+          <span>Recording</span>
+        </div>
         <div class="status-details">
           <div class="status-grid status-head">
             <div>Satellite</div><div>Azm</div><div>El</div><div>Range</div><div>Altitude</div><div>Doppler</div>
@@ -5302,6 +5732,9 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     let detachedFdtWindow = null;
     let sstvFilesWindow = null;
     let recordingsWindow = null;
+    let audioRecordingActive = false;
+    let audioRecordingCommandInFlight = false;
+    let lastAudioRecordingError = null;
     let logsWindow = null;
     let detachedMapCloseMonitor = null;
     let detachedFdtCloseMonitor = null;
@@ -6171,11 +6604,33 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       if (!isRunning) { button.blur(); }
     }
 
+    function updateRecordingIndicator(recording = {}, external = {}) {
+      const indicator = document.getElementById('audioRecordingIndicator');
+      const capture = recording.active && recording.status === 'recording' ? recording
+        : external.status === 'recording' ? external : null;
+      indicator.hidden = !capture;
+      indicator.title = capture?.output_file ? `Recording to ${capture.output_file}` : '';
+    }
+
     async function refreshStatus() {
       try {
         const response = await fetch('/api/status', { cache: 'no-store' });
         const data = await response.json();
         const fdtAvailable = Boolean(data.fdt_available);
+        const recording = data.audio_recording || {};
+        updateRecordingIndicator(recording, data.external_audio_recording || {});
+        audioRecordingActive = Boolean(recording.active);
+        const recordAudioItem = document.getElementById('recordAudioMenuItem');
+        if (recordAudioItem) {
+          recordAudioItem.textContent = audioRecordingActive ? 'Stop Recording' : 'Record Audio';
+          recordAudioItem.disabled = audioRecordingCommandInFlight || Boolean(data.shutdown_requested) ||
+            (!audioRecordingActive && Boolean(data.pass_active || data.tracking_running));
+          recordAudioItem.title = recording.error || recording.output_file || '';
+        }
+        if (recording.error && recording.error !== lastAudioRecordingError) {
+          data.message = `Audio recording failed: ${recording.error}`;
+        }
+        lastAudioRecordingError = recording.error || null;
         document.body.classList.toggle(
           'pass-in-progress',
           Boolean(data.pass_active || data.tracking_running)
@@ -6351,6 +6806,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         }
         resetPassListScroll();
       } catch (err) {
+        updateRecordingIndicator();
         set('message', 'Web console update failed: ' + err);
       }
     }
@@ -7582,9 +8038,44 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         table.appendChild(header);
       }
 
+      function applyDifferenceHighlight(keyCell, currentCell, input, originalCell, isDifferent) {
+        const different = Boolean(isDifferent);
+
+        // Only the key and the two displayed values are highlighted.  Do not
+        // color the Current cell/container itself; normal Current entries must
+        // retain the standard UI text color.
+        for (const element of [keyCell, input, originalCell]) {
+          if (!element) { continue; }
+          element.classList.toggle('general-settings-different', different);
+          if (different) {
+            // Apply directly as !important so neither Classic nor Modern theme
+            // rules can accidentally override the comparison indication.
+            element.style.setProperty('color', '#ffe45e', 'important');
+            element.style.setProperty('font-weight', '900', 'important');
+            if (element === input) {
+              element.style.setProperty('-webkit-text-fill-color', '#ffe45e', 'important');
+            }
+          } else {
+            element.style.removeProperty('color');
+            element.style.removeProperty('font-weight');
+            if (element === input) {
+              element.style.removeProperty('-webkit-text-fill-color');
+            }
+          }
+        }
+
+        // Ensure the cell itself never inherits the difference color.
+        if (currentCell) {
+          currentCell.classList.remove('general-settings-different');
+          currentCell.style.removeProperty('color');
+          currentCell.style.removeProperty('font-weight');
+        }
+      }
+
       const safeRows = Array.isArray(rows) ? rows : [];
       for (const row of safeRows) {
         const key = String(row?.key ?? '');
+        const originalValue = String(row?.original ?? '');
 
         const keyCell = document.createElement('div');
         keyCell.className = 'general-settings-cell general-settings-key';
@@ -7598,6 +8089,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         const input = document.createElement('input');
         input.type = 'text';
         input.dataset.generalSettingsKey = key;
+        input.dataset.originalValue = originalValue;
         input.value = row?.current ?? '';
         input.setAttribute('aria-label', 'Current value for ' + key);
         currentCell.appendChild(input);
@@ -7606,8 +8098,31 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         const originalCell = document.createElement('div');
         originalCell.className = 'general-settings-cell general-settings-original';
         originalCell.setAttribute('role', 'cell');
-        originalCell.textContent = row?.original ?? '';
+        originalCell.textContent = originalValue;
         table.appendChild(originalCell);
+
+        // Determine the initial highlight from the values actually displayed in
+        // the browser, rather than relying only on a server-provided flag.  This
+        // makes a visible 4-vs-3 (for example) unambiguously highlight even if an
+        // older browser/server payload omits or mishandles the `different` flag.
+        // Presence flags preserve highlighting for keys that exist in only one
+        // of the two YAML files even when the displayed fallback values match.
+        const currentPresent = row?.current_present !== false;
+        const originalPresent = row?.original_present !== false;
+        const initiallyDifferent = (
+          currentPresent !== originalPresent
+          || String(input.value) !== originalValue
+          || Boolean(row?.different)
+        );
+        applyDifferenceHighlight(keyCell, currentCell, input, originalCell, initiallyDifferent);
+
+        input.addEventListener('input', () => {
+          const editedDifferent = (
+            currentPresent !== originalPresent
+            || String(input.value) !== String(input.dataset.originalValue ?? '')
+          );
+          applyDifferenceHighlight(keyCell, currentCell, input, originalCell, editedDifferent);
+        });
       }
     }
 
@@ -8087,6 +8602,150 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       }
     }
 
+    function setEditPresetMessage(message) {
+      const messageElement = document.getElementById('editPresetMessage');
+      if (messageElement) { messageElement.textContent = message || ''; }
+    }
+
+    function renderEditPresetFields(data) {
+      const fieldsElement = document.getElementById('editPresetFields');
+      if (!fieldsElement) { return; }
+      fieldsElement.innerHTML = '';
+      const fieldData = data && typeof data === 'object' ? data : {};
+      const keys = Object.keys(fieldData);
+      if (!keys.length) {
+        const emptyMessage = document.createElement('div');
+        emptyMessage.className = 'field-help';
+        emptyMessage.textContent = 'No editable keys are present in this preset.';
+        fieldsElement.appendChild(emptyMessage);
+        return;
+      }
+      for (const key of keys) {
+        const label = document.createElement('label');
+        const safeId = 'editPresetField_' + key.replace(/[^A-Za-z0-9_-]/g, '_');
+        label.setAttribute('for', safeId);
+        label.textContent = key;
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = safeId;
+        input.dataset.editPresetKey = key;
+        input.value = fieldData[key] ?? '';
+
+        fieldsElement.appendChild(label);
+        fieldsElement.appendChild(input);
+      }
+    }
+
+    function populateEditPresetSelect(files, selectedFilename) {
+      const select = document.getElementById('editPresetSelect');
+      if (!select) { return; }
+      select.innerHTML = '';
+      const filenames = Array.isArray(files) ? files : [];
+      if (!filenames.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No preset YAML files found';
+        select.appendChild(option);
+        select.disabled = true;
+        return;
+      }
+      select.disabled = false;
+      for (const filename of filenames) {
+        const option = document.createElement('option');
+        option.value = String(filename);
+        option.textContent = String(filename);
+        select.appendChild(option);
+      }
+      select.value = filenames.includes(selectedFilename) ? selectedFilename : filenames[0];
+    }
+
+    function collectEditPresetFields() {
+      const data = {};
+      document.querySelectorAll('#editPresetFields input[data-edit-preset-key]').forEach((input) => {
+        data[input.dataset.editPresetKey] = input.value;
+      });
+      return data;
+    }
+
+    async function loadEditPreset(filename = '') {
+      const query = filename ? `?name=${encodeURIComponent(filename)}` : '';
+      setEditPresetMessage('Loading preset...');
+      try {
+        const response = await fetch('/api/config/edit_preset' + query, { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message || 'Could not load preset.');
+        }
+        populateEditPresetSelect(result.files || [], result.filename || '');
+        renderEditPresetFields(result.data || {});
+        const sessionEditable = result.editable !== false;
+        const presetEditable = applyConfigEditorAccess(
+          '#editPresetFields',
+          'editPresetSaveButton',
+          sessionEditable && Boolean(result.filename)
+        );
+        const loadedMessage = result.message || 'Preset loaded.';
+        setEditPresetMessage(
+          result.filename ? configEditorMessage(loadedMessage, sessionEditable) : loadedMessage
+        );
+        const firstInput = document.querySelector('#editPresetFields input[data-edit-preset-key]');
+        if (presetEditable && firstInput) { firstInput.focus(); firstInput.select(); }
+      } catch (err) {
+        renderEditPresetFields({});
+        const saveButton = document.getElementById('editPresetSaveButton');
+        if (saveButton) { saveButton.disabled = true; }
+        setEditPresetMessage('Preset load failed: ' + err.message);
+      }
+    }
+
+    async function openEditPresetDialog() {
+      const modal = document.getElementById('editPresetModal');
+      if (!modal) { return; }
+      modal.classList.add('open');
+      modal.setAttribute('aria-hidden', 'false');
+      await loadEditPreset();
+    }
+
+    function closeEditPresetDialog() {
+      const modal = document.getElementById('editPresetModal');
+      if (!modal) { return; }
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+      setEditPresetMessage('');
+      const menuItem = document.getElementById('configEditPresetMenuItem');
+      if (menuItem) { menuItem.focus(); }
+    }
+
+    async function saveEditPresetDialog(event) {
+      if (event) { event.preventDefault(); }
+      const saveButton = document.getElementById('editPresetSaveButton');
+      if (saveButton && saveButton.disabled) {
+        setEditPresetMessage(REMOTE_CONFIG_READ_ONLY_MESSAGE);
+        return;
+      }
+      const select = document.getElementById('editPresetSelect');
+      const filename = select ? select.value : '';
+      setEditPresetMessage('Saving preset...');
+      try {
+        const response = await fetch('/api/config/edit_preset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({ filename, data: collectEditPresetFields() })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message || 'Could not save preset.');
+        }
+        set('message', result.message || 'Preset saved.');
+        closeEditPresetDialog();
+        refreshStatus();
+      } catch (err) {
+        setEditPresetMessage('Preset save failed: ' + err.message);
+      }
+    }
+
     const mapMenuItem = document.getElementById('mapMenuItem');
     if (mapMenuItem) {
       mapMenuItem.addEventListener('click', toggleMapVisibility);
@@ -8103,6 +8762,22 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     const recordingsMenuItem = document.getElementById('recordingsMenuItem');
     if (recordingsMenuItem) {
       recordingsMenuItem.addEventListener('click', openRecordingsWindow);
+    }
+    const recordAudioMenuItem = document.getElementById('recordAudioMenuItem');
+    if (recordAudioMenuItem) {
+      recordAudioMenuItem.addEventListener('click', async () => {
+        if (audioRecordingCommandInFlight) { return; }
+        const action = audioRecordingActive ? 'stop_audio_recording' : 'start_audio_recording';
+        const label = audioRecordingActive ? 'Stop Recording' : 'Record Audio';
+        audioRecordingCommandInFlight = true;
+        recordAudioMenuItem.disabled = true;
+        try {
+          await runMenuCommand(action, label, false);
+        } finally {
+          audioRecordingCommandInFlight = false;
+          await refreshStatus();
+        }
+      });
     }
     const logsMenuItem = document.getElementById('logsMenuItem');
     if (logsMenuItem) {
@@ -8419,6 +9094,78 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       });
     }
 
+    const configEditPresetMenuItem = document.getElementById('configEditPresetMenuItem');
+    if (configEditPresetMenuItem) {
+      configEditPresetMenuItem.addEventListener('click', openEditPresetDialog);
+    }
+    const editPresetForm = document.getElementById('editPresetForm');
+    if (editPresetForm) {
+      editPresetForm.addEventListener('submit', saveEditPresetDialog);
+    }
+    const editPresetSelect = document.getElementById('editPresetSelect');
+    if (editPresetSelect) {
+      editPresetSelect.addEventListener('change', () => loadEditPreset(editPresetSelect.value));
+    }
+    const editPresetClose = document.getElementById('editPresetClose');
+    if (editPresetClose) {
+      editPresetClose.addEventListener('click', closeEditPresetDialog);
+    }
+    const editPresetCancelButton = document.getElementById('editPresetCancelButton');
+    if (editPresetCancelButton) {
+      editPresetCancelButton.addEventListener('click', closeEditPresetDialog);
+    }
+    const editPresetModal = document.getElementById('editPresetModal');
+    if (editPresetModal) {
+      editPresetModal.addEventListener('click', (event) => {
+        if (event.target === editPresetModal) { closeEditPresetDialog(); }
+      });
+    }
+
+    const diagnosticsDialog = document.getElementById('environmentDiagnosticsDialog');
+    const diagnosticsSave = document.getElementById('environmentDiagnosticsSave');
+    let diagnosticsReport = '';
+    document.getElementById('environmentDiagnosticsMenuItem').addEventListener('click', async () => {
+      const results = document.getElementById('environmentDiagnosticsResults');
+      const summary = document.getElementById('environmentDiagnosticsSummary');
+      diagnosticsReport = '';
+      diagnosticsSave.disabled = true;
+      results.textContent = '';
+      summary.textContent = 'Checking the server environment…';
+      diagnosticsDialog.showModal();
+      try {
+        const response = await fetch('/api/command', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'environment_diagnostics' })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) { throw new Error(result.message || 'Diagnostics request failed.'); }
+        diagnosticsReport = result.report;
+        summary.textContent = result.warnings
+          ? `Completed • ${result.warnings} warning(s) to review`
+          : 'Completed • No warnings found';
+        diagnosticsReport.split('\n').forEach(line => {
+          const row = document.createElement('div');
+          row.textContent = line;
+          row.style.color = line.includes('[WARNING]') ? '#ffd479' : '#bdeddf';
+          results.appendChild(row);
+        });
+        diagnosticsSave.disabled = false;
+      } catch (err) {
+        summary.textContent = 'Unable to complete Environment Diagnostics';
+        results.textContent = String(err);
+      }
+    });
+    document.getElementById('environmentDiagnosticsClose').addEventListener('click', () => diagnosticsDialog.close());
+    diagnosticsSave.addEventListener('click', () => {
+      const url = URL.createObjectURL(new Blob([diagnosticsReport], { type: 'text/plain;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `bqe_environment_diagnostics_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     const licenseMenuItem = document.getElementById('licenseMenuItem');
     if (licenseMenuItem) {
       licenseMenuItem.addEventListener('click', openLicenseDialog);
@@ -8458,6 +9205,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         closeSatellitesEditorDialog();
         closeAddSatelliteDialog();
         closePresetDialog();
+        closeEditPresetDialog();
         closeTestPassDialog();
         closeCustomScheduleDialog();
         closeFdtConsole();
@@ -8802,6 +9550,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self.send_bytes(status, "application/json; charset=utf-8", body)
             return
 
+        if path == "/api/config/edit_preset":
+            selected_filename = parse_qs(parsed_url.query).get("name", [""])[0]
+            result = self._config_result_with_access(read_edit_preset_payload(selected_filename))
+            status = 200 if result.get("ok", False) else 400
+            body = json.dumps(result, default=str).encode("utf-8")
+            self.send_bytes(status, "application/json; charset=utf-8", body)
+            return
+
         if path == "/api/license":
             result = dict(read_license_payload())
             status = 200 if result.get("ok", False) else (404 if not result.get("exists", False) else 500)
@@ -8864,6 +9620,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
         if path == "/api/config/create_preset":
             result = dict(write_create_preset_payload(request_payload))
+            status = 200 if result.get("ok", False) else 400
+            body = json.dumps(result, default=str).encode("utf-8")
+            self.send_bytes(status, "application/json; charset=utf-8", body)
+            return
+
+        if path == "/api/config/edit_preset":
+            result = dict(write_edit_preset_payload(request_payload))
             status = 200 if result.get("ok", False) else 400
             body = json.dumps(result, default=str).encode("utf-8")
             self.send_bytes(status, "application/json; charset=utf-8", body)

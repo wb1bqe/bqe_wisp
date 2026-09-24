@@ -1,68 +1,64 @@
 program_settings:
-
-  - common:
-      python_path: python   # Can be a full path
-
-  - bqe_wisp:
-      horizon_threshold_elevation: 0.1 # degrees
-      ui_port: 8028
-      ui_refresh_interval: 5 seconds
-      ui_theme: modern  # Use "modern" or "classic"
-      scheduler_sleep_interval: 30 # Seconds; scheduler/web-server polling only, not Doppler tracking
-
-      # Slower systems may need to increase this if they experience timeouts when scheduling large numbers of satellites.
-      web_command_timeout_seconds: 300 # Seconds
-      sstv_gallery_location: 'c:/ham/mmsstv/history'  # Full or relative path (Windows or linux format)
-    
-  - bqe_wisp_web:
-      placeholder_key: ''
-
-  - bqe_schedule_passes:
-      # Generate each satellite's candidate passes on separate CPU processes when
-      # --auto_schedule is used, or when more than 3 --nickname values are supplied.
-      parallel_pass_generation: true
-      parallel_pass_workers: 4  # Maximum worker processes; also capped by available CPUs and satellite count
-
-  - bqe_track_continuously:
-      fdt_recalculation_interval: 10 # Retained for backward compatibility; automatic Doppler cadence uses sleep_interval/high-pass rules below.
-      high_pass_elevation: '65'
-      horizon_threshold_elevation: '.1'
-      sleep_interval: '10' # Seconds; normal tracking/Doppler cadence for all satellites
-      sleep_interval_high_elevation: '3' # Seconds; used above high_pass_elevation for all satellites
-      tle_file: 'keps.txt'
-      satellite_config_file: 'bqe_config/satellites.yaml'  # TODO - this not needed?
-      antenna_request_timeout: '5'  # Seconds
-      satellite_config: 'bqe_config/satellites.yaml'
-      qth_config: 'bqe_config/my_qth.yaml'
-      radio_config: 'bqe_config/my_rig.yaml'
-      default_rigctld_pid_file: 'logs/rigctld.pid'
-      default_pass_program_pid_file: 'logs/pass_program.pid'
-      default_enable_antenna_tracking: None
-      default_enable_tuning: None
-      initial_antenna: '1'
-      default_antenna: '1' # When there is no rule selection
-      antenna_switch_url: None
-      antenna_request_timeout_seconds: None,
-      antenna_selection_rules: '[]'
-      default_antenna_description: None
-      process_stop_timeout_seconds: '5.0'
-      # For Testing only.   Fixed values used by Tracking > Run test pass now.
-      test_pass_azimuth: 45
-      test_pass_elevation: 45
-      test_pass_doppler: +3000 # hz
-
-  - plugins:
-      bqe_sound_recorder:
-        recordings: 'plugins/bqe_sound_recorder/recordings'
-
-  - third_party:
-      # Hamlib stuff
-      rigctld_port: '4532'
-      rigctl_path: "rigctl"
-      rigctld_path: "rigctld"
-      rigctld_startup_delay_seconds: 2
-      rigctld_startup_output_timeout_seconds: 2
-
-  # Al's private stuff
-  - wb1bqe:
-      rcs10_address: 192.168.1.110:8000   # Al's VHF antenna switch
+- common:
+    python_path: python
+- bqe_wisp:
+    horizon_threshold_elevation: 0.1
+    ui_port: 8028
+    ui_refresh_interval: 5 seconds
+    ui_theme: modern
+    scheduler_sleep_interval: 30
+    idle_tuning_delay_seconds: 3
+    web_command_timeout_seconds: 300
+    sstv_gallery_location: c:/ham/mmsstv/history
+- bqe_set_radio_from_yaml:
+    default_squelch_level_fm: 0.25
+    default_squelch_level_ssb: 0
+    default_squelch_level_cw: 0
+    default_agc_fm: fast
+    default_agc_ssb: medium
+    default_agc_cw: slow
+    default_bandwidth_fm: 15000
+    default_bandwidth_ssb: 3000
+    default_bandwidth_cw: 1500
+- bqe_wisp_web:
+    placeholder_key: ''
+- bqe_schedule_passes:
+    parallel_pass_generation: true
+    parallel_pass_workers: 4
+- bqe_track_continuously:
+    fdt_recalculation_interval: 10
+    high_pass_elevation: 65
+    horizon_threshold_elevation: 0.1
+    sleep_interval: 10
+    sleep_interval_high_elevation: 3
+    tle_file: keps.txt
+    satellite_config_file: bqe_config/satellites.yaml
+    antenna_request_timeout: 5
+    satellite_config: bqe_config/satellites.yaml
+    qth_config: bqe_config/my_qth.yaml
+    radio_config: bqe_config/my_rig.yaml
+    default_rigctld_pid_file: logs/rigctld.pid
+    default_pass_program_pid_file: logs/pass_program.pid
+    default_enable_antenna_tracking: None
+    default_enable_tuning: None
+    initial_antenna: 1
+    default_antenna: 1
+    antenna_switch_url: None
+    antenna_request_timeout_seconds: None,
+    antenna_selection_rules: '[]'
+    default_antenna_description: None
+    process_stop_timeout_seconds: 5.0
+    test_pass_azimuth: 45
+    test_pass_elevation: 45
+    test_pass_doppler: 3000
+- plugins:
+    bqe_sound_recorder:
+      recordings: plugins/bqe_sound_recorder/recordings
+- third_party:
+    rigctld_port: 4532
+    rigctl_path: rigctl
+    rigctld_path: rigctld
+    rigctld_startup_delay_seconds: 2
+    rigctld_startup_output_timeout_seconds: 2
+- wb1bqe:
+    rcs10_address: 192.168.1.110:8000

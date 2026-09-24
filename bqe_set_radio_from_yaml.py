@@ -28,12 +28,14 @@ import os
 import subprocess
 import sys
 import yaml
+from bqe_hamlib_interface import AGC_LEVELS, normalize_agc, normalize_squelch_level
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
 
 preset_GLOB = "presets/*_preset.yaml"
 DEFAULT_RADIO_CONFIG = "bqe_config/my_rig.yaml"
+GENERAL_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bqe_config", "general_settings.yaml")
 WEB_HOST = "127.0.0.1"
 WEB_PORT = 8015
 
@@ -138,18 +140,72 @@ def program_preset_by_nickname(nickname, radio_config=DEFAULT_RADIO_CONFIG):
     return program_preset(preset_cfg, radio_cfg)
 
 
+def preset_squelch_level(preset_cfg, mode):
+    """Resolve preset-only defaults; an explicit numeric level takes precedence."""
+    return preset_mode_setting(preset_cfg, mode, "squelch_level",
+                               normalize_squelch_level, {"fm": 0.25, "ssb": 0.0, "cw": 0.0})
+
+
+def preset_agc(preset_cfg, mode):
+    """Resolve preset-only AGC defaults, preserving explicit overrides."""
+    return preset_mode_setting(preset_cfg, mode, "agc",
+                               normalize_agc, {"fm": "fast", "ssb": "medium", "cw": "slow"})
+
+
+def preset_bandwidth(preset_cfg, mode):
+    """Resolve preset bandwidth in Hz; explicit zero keeps Hamlib's default."""
+    def normalize(value):
+        return None if value is None or value == "" else int(value)
+
+    bandwidth = preset_mode_setting(preset_cfg, mode, "bandwidth", normalize,
+                                    {"fm": 15000, "ssb": 3000, "cw": 1500})
+    return 0 if bandwidth is None else bandwidth
+
+
+def preset_mode_setting(preset_cfg, mode, setting, normalize, defaults):
+    """Read a mode default at tuning time; blank/null entries inherit it."""
+    level = normalize(preset_cfg.get(setting))
+    if level is not None:
+        return level
+
+    if mode in ("FM", "FMN", "NFM", "WFM", "C4FM", "PKTFM"):
+        family = "fm"
+    elif mode in ("SSB", "USB", "LSB", "PKTUSB", "PKTLSB"):
+        family = "ssb"
+    elif mode in ("CW", "CWR"):
+        family = "cw"
+    else:
+        return None
+
+    key = f"default_{setting}_{family}"
+    fallback = defaults[family]
+    try:
+        config = load_yaml(GENERAL_SETTINGS_FILE) or {}
+    except FileNotFoundError:
+        config = {}
+    sections = config.get("program_settings", {})
+    if isinstance(sections, list):
+        sections = next((item for item in sections
+                         if isinstance(item, dict) and "bqe_set_radio_from_yaml" in item), {})
+    settings = sections.get("bqe_set_radio_from_yaml", {}) or {}
+    level = normalize(settings.get(key, fallback))
+    return fallback if level is None else level
+
+
 def program_preset(preset_cfg, radio_cfg):
     radio_type, radio_port, radio_baud = get_radio_settings(radio_cfg)
 
     frequency_hz = int(preset_cfg["frequency_hz"])
-    mode = str(preset_cfg.get("mode", "FM")).upper()
-    bandwidth = int(preset_cfg.get("bandwidth", 0))
+    mode = str(preset_cfg.get("mode", "FM")).strip().upper()
+    bandwidth = preset_bandwidth(preset_cfg, mode)
 
     offset_hz = offset_hz_from_config(preset_cfg)
     shift = str(preset_cfg.get("repeater_shift", "")).strip()
 
     ctcss_tone = preset_cfg.get("ctcss_tone")
     power = preset_cfg.get("power")
+    squelch_level = preset_squelch_level(preset_cfg, mode)
+    agc = preset_agc(preset_cfg, mode)
 
 
     log = []
@@ -183,6 +239,14 @@ def program_preset(preset_cfg, radio_cfg):
 
     run_rigctl(radio_type, radio_port, ["F", str(frequency_hz)],radio_baud)
     add(f"Set frequency to {frequency_hz}")
+
+    if squelch_level is not None:
+        run_rigctl(radio_type, radio_port, ["L", "SQL", str(squelch_level)], radio_baud)
+        add(f"Set squelch level to {squelch_level}")
+
+    if agc is not None:
+        run_rigctl(radio_type, radio_port, ["L", "AGC", str(AGC_LEVELS[agc])], radio_baud)
+        add(f"Set AGC to {agc}")
 
     run_rigctl(radio_type, radio_port, ["O", str(offset_hz)],radio_baud)
     add(f"Set preset offset to {offset_hz}")

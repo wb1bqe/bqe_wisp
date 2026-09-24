@@ -6,4 +6,6 @@ frequency_hz: "147135000"
 mode: C4FM
 repeater_offset_khz: "600"
 ctcss_tone: "None"
+agc: medium
+squelch_level: .25
 power: 25

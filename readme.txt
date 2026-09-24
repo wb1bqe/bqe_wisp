@@ -8,7 +8,7 @@ This set of scripts mimics the major functions of the original wisp in a command
 
 BQE Wisp can download Keplerian elements,  then generate a schedule of satellites to be tracked,  then will wait for each satellite to come over the horizon and will tune to the downlink, and apply doppler tracking in real time.  
 
-Other optional programs (For example, mmsstv, qsstv (Linux), telemetry decoders, or wsjtx) can be configured to be launched during specific satellite passes.   Likewise,  an "Idle task" including both a frequency to monitor, and a program to run while monitoring can be configured to maximize rig utilization and enjoyment between passes. 
+Other optional programs (For example, mmsstv, Yoniq, qsstv (Linux), telemetry decoders, or wsjtx) can be configured to be launched during specific satellite passes.   Likewise,  an "Idle task" including both a frequency to monitor, and a program to run while monitoring can be configured to maximize rig utilization and enjoyment between passes. 
 
 Support:
   Best effort support is available from wb1bqe@gmail.com
@@ -23,7 +23,7 @@ To run:
 	Clone this repo
 	update bqe_config/my_qth.yaml and bqe_config/my_rig.yaml as appropriate for your qth
 	% python - Install python libraries using the following command(s)
- 		python -m pip install numpy skyfield PyYaml argparse datetime
+ 		python -m pip install numpy skyfield PyYaml argparse datetime soundcard lameenc
 
 
 

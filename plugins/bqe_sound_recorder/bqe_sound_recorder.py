@@ -19,6 +19,36 @@ APP_NAME = "PC Audio Recorder"
 DEFAULT_RATE = 48_000
 DEFAULT_BITRATE = 192
 DEFAULT_BLOCKSIZE = 4_096
+STATUS_FILE = Path(__file__).resolve().parents[2] / "logs" / "audio_recorder_status.json"
+
+
+def publish_recording_status(recorder, path=STATUS_FILE):
+    """Publish CLI capture state for the main page without opening a browser."""
+    path = Path(path)
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        state = recorder.snapshot()
+        state.update(updated_at=time.time(), pid=os.getpid())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        # A status-display failure must not interrupt audio capture.
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def external_recording_status(path=STATUS_FILE):
+    """Ignore old heartbeats after a recorder crashes or is forcibly stopped."""
+    try:
+        state = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(state, dict) and 0 <= time.time() - float(state.get("updated_at", 0)) <= 5:
+            return state
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"status": "stopped"}
 
 
 WEB_PAGE = r"""<!doctype html>
@@ -131,13 +161,14 @@ def channel_count(device):
 class LoopbackRecorder:
     def __init__(self, output_prefix, device_name=None, input_device_name=None,
                  samplerate=DEFAULT_RATE, bitrate=DEFAULT_BITRATE,
-                 blocksize=DEFAULT_BLOCKSIZE):
+                 blocksize=DEFAULT_BLOCKSIZE, timestamp_separator="_"):
         self.output_prefix = Path(output_prefix).expanduser().resolve()
         self.device_name = device_name
         self.input_device_name = input_device_name
         self.samplerate = samplerate
         self.bitrate = bitrate
         self.blocksize = blocksize
+        self.timestamp_separator = timestamp_separator
         self.stop_event = threading.Event()
         self.thread = None
         self.lock = threading.Lock()
@@ -250,10 +281,11 @@ class LoopbackRecorder:
                 raise ValueError("--output must include a filename prefix, not only a directory")
             output_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
-            final_path = output_dir / "{}_{}.mp3".format(output_name, stamp)
+            filename = output_name + self.timestamp_separator + stamp
+            final_path = output_dir / (filename + ".mp3")
             suffix = 1
             while final_path.exists() or Path(str(final_path) + ".part").exists():
-                final_path = output_dir / "{}_{}_{}.mp3".format(output_name, stamp, suffix)
+                final_path = output_dir / "{}_{}.mp3".format(filename, suffix)
                 suffix += 1
             part_path = Path(str(final_path) + ".part")
 
@@ -424,7 +456,7 @@ def list_devices():
     return 0
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1", help="Web console address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Web console port (default: 8765)")
@@ -444,7 +476,12 @@ def parse_args():
     )
     parser.add_argument("--sample-rate", type=int, default=DEFAULT_RATE, help="Sample rate in Hz")
     parser.add_argument("--bitrate", type=int, default=DEFAULT_BITRATE, help="MP3 bitrate in kbps")
-    parser.add_argument("--no-browser", action="store_true", help="Do not open the web console automatically")
+    browser_group = parser.add_mutually_exclusive_group()
+    browser_group.add_argument("--open-browser", dest="no_browser", action="store_false",
+                               help="Open the optional recorder web console automatically")
+    browser_group.add_argument("--no-browser", dest="no_browser", action="store_true",
+                               help="Do not open the web console (the default)")
+    parser.set_defaults(no_browser=True)
     parser.add_argument(
         "--stop-file",
         default=os.environ.get("BQE_PASS_STOP_FILE"),
@@ -458,7 +495,7 @@ def parse_args():
         action="store_true",
         help="List playback and direct-input devices, then exit",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main():
@@ -500,6 +537,7 @@ def main():
         return 1
 
     recorder.start()
+    publish_recording_status(recorder)
     url_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
     url = "http://{}:{}".format(url_host, args.port)
     print("{} is starting immediately.".format(APP_NAME))
@@ -512,6 +550,7 @@ def main():
     try:
         while not shutdown_event.is_set():
             server.handle_request()
+            publish_recording_status(recorder)
             if args.stop_file and os.path.exists(args.stop_file):
                 print("Clean stop requested by the satellite pass controller.")
                 request_shutdown()
@@ -521,6 +560,7 @@ def main():
     finally:
         recorder.stop()
         recorder.join()
+        publish_recording_status(recorder)
         server.server_close()
         if args.stop_file:
             try:

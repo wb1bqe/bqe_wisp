@@ -4,4 +4,6 @@ type: "Digital"
 frequency_hz: "144174000"
 mode: "USB"
 bandwidth: "3000"
+agc: disabled
+squelch_level: 0
 program_to_run_while_waiting: "wsjtx"

@@ -32,6 +32,7 @@ from bqe_wisp_web import (
     build_index_html,
     get_web_console_port,
     load_web_console_settings,
+    resolve_sstv_images_directory,
 )
 
 try:
@@ -60,6 +61,7 @@ DEFAULT_GENERAL_SETTINGS = {
     # Scheduler/web-server polling cadence. This is intentionally separate from
     # the satellite tracking/Doppler cadence in bqe_track_continuously.
     "scheduler_sleep_interval_seconds": 30.0,
+    "idle_tuning_delay_seconds": 3.0,
     # Tracking-loop cadence defaults. These are read from the
     # bqe_track_continuously section and also shown by the FDT Console.
     "tracking_sleep_interval_seconds": 10.0,
@@ -185,6 +187,16 @@ def load_general_settings(filename=GENERAL_SETTINGS_FILE):
         "program_settings.bqe_wisp.web_command_timeout_seconds",
     )
 
+    tuning_delay = _coerce_float(
+        wisp_settings.get("idle_tuning_delay_seconds"),
+        settings["idle_tuning_delay_seconds"],
+        "program_settings.bqe_wisp.idle_tuning_delay_seconds",
+    )
+    if not 0 <= tuning_delay < float("inf"):
+        print("Warning: idle_tuning_delay_seconds must be finite and nonnegative; using 3 seconds.")
+        tuning_delay = 3.0
+    settings["idle_tuning_delay_seconds"] = tuning_delay
+
     settings["tracking_sleep_interval_seconds"] = _coerce_seconds(
         track_settings.get("sleep_interval"),
         settings["tracking_sleep_interval_seconds"],
@@ -294,9 +306,201 @@ FDT_CONTROL_FILE = os.path.join(LOG_DIR, "fdt_control.json")
 FDT_WHEEL_STEP_HZ = 200.0
 IDLE_TASK_STATUS_FILE = os.path.join(SCRIPT_DIR, "logs", "idle_task.yaml")
 UPDATE_KEPS_SCRIPT = os.path.join(SCRIPT_DIR, "bqe_update_keps.py")
+PRESET_WEB_PORT = getattr(idle_task_ctl, "WEB_PORT", 8015)
+
+
+def _find_configured_executable(configured_path):
+    """Resolve a configured executable name or path on Windows and Linux."""
+    if configured_path is None or not str(configured_path).strip():
+        return None
+
+    expanded_path = os.path.expandvars(os.path.expanduser(str(configured_path).strip()))
+
+    # shutil.which() handles PATH lookup on both platforms and also honors
+    # PATHEXT on Windows (so a configured value such as "rigctl" can find
+    # rigctl.exe).  When a relative path contains a directory component, also
+    # try it relative to the BQE WISP installation directory.
+    candidates = [expanded_path]
+    if not os.path.isabs(expanded_path) and os.path.dirname(expanded_path):
+        candidates.append(os.path.join(SCRIPT_DIR, expanded_path))
+
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return os.path.abspath(resolved)
+
+        # An explicitly configured file can still be usable on Windows even
+        # when its executable bit is not represented like it is on Linux.
+        if os.path.isfile(candidate) and (os.name == "nt" or os.access(candidate, os.X_OK)):
+            return os.path.abspath(candidate)
+
+    return None
+
+
+def _diagnostic_read_yaml(path):
+    if yaml is None:
+        raise RuntimeError("PyYAML is not available")
+    with open(path, "r", encoding="utf-8-sig") as stream:
+        data = yaml.safe_load(stream)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a YAML mapping")
+    return data
+
+
+def _diagnostic_settings_values(data):
+    """Compare named sections independently of list ordering or YAML layout."""
+    data = dict(data)
+    sections = data.get("program_settings")
+    if isinstance(sections, list):
+        merged = {}
+        for item in sections:
+            if not isinstance(item, dict):
+                raise ValueError("program_settings entries must be mappings")
+            for key, value in item.items():
+                if key in merged:
+                    raise ValueError(f"Duplicate program_settings section: {key}")
+                merged[key] = value
+        data["program_settings"] = merged
+    values = {}
+
+    def visit(value, path):
+        if isinstance(value, dict) and value:
+            for key, child in value.items():
+                visit(child, path + (str(key),))
+        else:
+            # Keep ordinary lists intact; their order can be meaningful.
+            values[path] = value
+
+    visit(data, ())
+    return values
+
+
+def _diagnostic_value(value):
+    return json.dumps(value, ensure_ascii=True, default=str)
+
+
+def _configuration_diagnostics(report):
+    report(f"[INFO] --------------- Checking BQE Wisp environment settings---------------")
+    template_path = os.path.join(SCRIPT_DIR, "templates", "general_settings_template.yaml")
+    report(f"[INFO] Configuration comparison: {GENERAL_SETTINGS_FILE} against {template_path}")
+    try:
+        current = _diagnostic_settings_values(_diagnostic_read_yaml(GENERAL_SETTINGS_FILE))
+        template = _diagnostic_settings_values(_diagnostic_read_yaml(template_path))
+        differences = 0
+        
+        for path in sorted(set(current) | set(template)):
+            key = ".".join(path) or "<root>"
+            if path not in current:
+                report(f"[WARNING] Missing setting: {key}; template={_diagnostic_value(template[path])}")
+            elif path not in template:
+                report(f"[INFO] Added setting: {key}; current={_diagnostic_value(current[path])}; template=<not present>")
+            elif _diagnostic_value(current[path]) != _diagnostic_value(template[path]):
+                report(f"[WARNING] Changed setting: {key}; template={_diagnostic_value(template[path])}; current={_diagnostic_value(current[path])}")
+            else:
+                continue
+            differences += 1
+        report(f"[INFO] Configuration comparison complete: {differences} difference(s).")
+    except Exception as exc:
+        report(f"[WARNING] Could not compare configuration files: {exc}")
+
+    for name in ("my_rig.yaml", "my_qth.yaml"):
+        path = os.path.join(SCRIPT_DIR, "bqe_config", name)
+        report(f"[INFO] Configuration key/value information: {path}")
+        try:
+            data = _diagnostic_read_yaml(path)
+            if not data:
+                report(f"[WARNING] {name} contains no key/value entries.")
+            for key, value in data.items():
+                report(f"[INFO] {name}: {key} = {_diagnostic_value(value)}")
+        except Exception as exc:
+            report(f"[WARNING] Could not read {path}: {exc}")
+
+
+def run_environment_diagnostics(emit=True):
+    """Return a report; optionally print it without redirecting global stdout."""
+    lines = []
+
+    def print(message):
+        lines.append(message.strip())
+
+    print("[INFO] --------------- BQE Wisp Integrity checks ---------------")
+    print(f"[INFO] Generated: {datetime.now(timezone.utc).isoformat()}")
+    print("[INFO] --------------- Checking external dependencies---------------")
+
+    for executable_name, configured_path in (
+            ("rigctl", RIGCTL_PATH),
+            ("rigctld", RIGCTLD_PATH)):
+        resolved_path = _find_configured_executable(configured_path)
+        if resolved_path:
+            print(
+                f"[INFO] {executable_name} found: {resolved_path} "
+                f"(configured as {configured_path!r})"
+            )
+        else:
+            print(
+                f"    [WARNING] {executable_name} was not found using the configured "
+                f"      path {configured_path!r}. Check "
+                "program_settings.third_party in bqe_config/general_settings.yaml."
+            )
+
+    unexpected_satellite_config = os.path.join(SCRIPT_DIR, "satellites.yaml")
+    if os.path.isfile(unexpected_satellite_config):
+        print(
+            "    [WARNING] satellites.yaml was found in the top-level program folder: "
+            f"     {unexpected_satellite_config}. Move or remove this copy so it cannot "
+            "be mistaken for the active configuration."
+        )
+    else:
+        print(
+            "    [INFO] satellites.yaml is not present in the top-level program folder "
+            "    (This is a good thing...)."
+        )
+
+    if os.path.isfile(SATELLITE_CONFIG_FILE):
+        print(f"    [INFO] Satellite configuration found: {SATELLITE_CONFIG_FILE}")
+    else:
+        print(
+            "    [WARNING] Satellite configuration was not found at the required "
+            f"     location: {SATELLITE_CONFIG_FILE}"
+        )
+
+    # Re-read settings on each request and resolve paths exactly as the gallery
+    # does (relative paths are relative to the program directory).
+    try:
+        location = load_web_console_settings(GENERAL_SETTINGS_FILE).sstv_gallery_location
+        directory = resolve_sstv_images_directory(location)
+        if directory is None:
+            print("[WARNING] SSTV gallery directory: sstv_gallery_location is not set in general_settings.yaml.")
+        elif directory.is_dir():
+            print(f"[INFO] SSTV gallery directory found: {directory} (sstv_gallery_location={location!r})")
+        else:
+            print(f"[WARNING] SSTV gallery directory not found or not a directory: {directory} (sstv_gallery_location={location!r})")
+    except Exception as exc:
+        print(f"[WARNING] Could not check SSTV gallery directory (sstv_gallery_location): {exc}")
+
+    print("[INFO] UI web ports:")
+    print(
+        f"    [INFO]   bqe_wisp.py / bqe_wisp_web.py: {WEB_CONSOLE_PORT} "
+        "       (main console and its map, FDT, audio, logs, and recordings views)"
+    )
+    print(
+        f"    [INFO]   bqe_set_radio_from_yaml.py: {PRESET_WEB_PORT} "
+        "       (standalone preset-control UI)"
+    )
+    print("[INFO] PC Audio Recorder / bqe_sound_recorder.py: 8765 "
+          "(default UI port; --port can override this; not a check that the recorder is running)")
+    print(f"    [INFO] Hamlib rigctld TCP control port (not a UI web port): {RIGCTLD_PORT}")
+    _configuration_diagnostics(print)
+    print("[INFO] Environment Diagnostics complete.")
+    report = "\n".join(lines) + "\n"
+    if emit:
+        sys.stdout.write(report)
+    return report
 
 STATE_LOCK = threading.RLock()
 FDT_TUNING_LOCK = threading.RLock()
+AUDIO_RECORDING_LOCK = threading.RLock()
+CURRENT_AUDIO_RECORDER = None
 APP_STATE = {
     "passes": [],
     "current_pass_key": None,
@@ -1114,6 +1318,13 @@ def run_pass(pass_entry, start, end):
     if SHUTDOWN_EVENT.is_set():
         return
 
+    # Serialize the handoff with manual starts.  Mark tracking active before
+    # releasing the lock so a browser request cannot restart idle recording.
+    with AUDIO_RECORDING_LOCK:
+        stop_audio_recording()
+        with STATE_LOCK:
+            APP_STATE["tracking_running"] = True
+
     CURRENT_PASS_END_EVENT.clear()
     sat_name = pass_entry["_satellite"]
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -1297,6 +1508,94 @@ def satellite_pass_is_active(now=None):
     return any(p["_start_dt"] <= now <= p["_end_dt"] for p in passes)
 
 
+def audio_recording_status():
+    """Expose the shared pass recorder's actual state, including device errors."""
+    with AUDIO_RECORDING_LOCK:
+        if CURRENT_AUDIO_RECORDER is None:
+            return {"status": "stopped", "active": False}
+        status = CURRENT_AUDIO_RECORDER.snapshot()
+        status["active"] = bool(
+            CURRENT_AUDIO_RECORDER.thread and CURRENT_AUDIO_RECORDER.thread.is_alive()
+        )
+        return status
+
+
+def stop_audio_recording():
+    """Close capture and flush the MP3 before handing audio over to a pass."""
+    with AUDIO_RECORDING_LOCK:
+        if CURRENT_AUDIO_RECORDER is not None:
+            CURRENT_AUDIO_RECORDER.stop()
+            CURRENT_AUDIO_RECORDER.join()
+        return audio_recording_status()
+
+
+def make_audio_recorder():
+    """Use the same capture settings and encoder as the configured pass recorder."""
+    from plugins.bqe_sound_recorder.bqe_sound_recorder import LoopbackRecorder, parse_args
+
+    if yaml is None:
+        raise RuntimeError("PyYAML is required to read the pass recording settings.")
+    with open(SATELLITE_CONFIG_FILE, "r", encoding="utf-8") as f:
+        root = yaml.safe_load(f) or {}
+    recorder_args = []
+    for satellite in root.get("satellites", []):
+        if not isinstance(satellite, dict):
+            continue
+        command = satellite.get("program_to_run_during_pass")
+        if not command:
+            continue
+        command = command_from_yaml_value(command)
+        recorder_index = next((
+            i for i, part in enumerate(command)
+            if os.path.basename(part).lower() == "bqe_sound_recorder.py"
+        ), None)
+        if recorder_index is not None:
+            recorder_args = command[recorder_index + 1:]
+            break
+    try:
+        options = parse_args(recorder_args)
+    except SystemExit as exc:
+        raise ValueError("The configured pass recorder arguments are invalid.") from exc
+    directory = load_web_console_settings(GENERAL_SETTINGS_FILE).recordings_location
+    directory = os.path.expanduser(directory or "plugins/bqe_sound_recorder/recordings")
+    if not os.path.isabs(directory):
+        directory = os.path.join(SCRIPT_DIR, directory)
+    return LoopbackRecorder(
+        output_prefix=os.path.join(directory, "Audio Recording"),
+        device_name=options.device,
+        input_device_name=options.input_device,
+        samplerate=options.sample_rate,
+        bitrate=options.bitrate,
+        timestamp_separator=" ",
+    )
+
+
+def control_audio_recording(action):
+    """Start between passes, or stop and save the menu's current recording."""
+    global CURRENT_AUDIO_RECORDER
+    with AUDIO_RECORDING_LOCK:
+        try:
+            if action == "stop_audio_recording":
+                status = stop_audio_recording()
+                message = "Audio recording stopped."
+                if status.get("output_file"):
+                    message += f" Saved to {status['output_file']}"
+            elif SHUTDOWN_EVENT.is_set() or satellite_pass_is_active():
+                return {"ok": False, "action": action,
+                        "message": "Record Audio is available when no pass is active."}
+            elif audio_recording_status()["active"]:
+                return {"ok": True, "action": action, "message": "Audio recording is already in progress."}
+            else:
+                CURRENT_AUDIO_RECORDER = make_audio_recorder()
+                CURRENT_AUDIO_RECORDER.start()
+                message = "Audio recording starting. It will stop automatically when a pass starts."
+            result = {"ok": True, "action": action, "message": message}
+        except Exception as exc:
+            result = {"ok": False, "action": action, "message": f"Audio recording failed: {exc}"}
+        _set_status_message(result["message"], last_command=action, last_command_result=result)
+        return result
+
+
 def program_preset_from_web(nickname):
     """Program a startup-discovered preset when no satellite pass is active."""
     nickname = str(nickname or "").strip()
@@ -1358,13 +1657,24 @@ def program_preset_from_web(nickname):
         "nickname": nickname,
         "message": message,
     }
+    helper_process = None
     try:
+        # A wait-time helper belongs to the preset that launched it.  Stop it
+        # before changing frequency/mode so a program such as WSJT-X or MMSSTV
+        # from the previous preset cannot continue running against the newly
+        # selected radio configuration.
+        stop_idle_wait_program(
+            reason=f"before applying radio preset {nickname!r}"
+        )
         idle_task_ctl.program_preset_by_nickname(nickname)
+        helper_process = start_idle_wait_program(preset_nickname=nickname)
 
         status_updated = update_idle_task_status_for_preset(nickname)
         message = f"Radio programmed with preset {nickname}. Waiting for the next pass."
         if status_updated:
             message += " Updated idle_task_status.yaml."
+        if helper_process is not None:
+            message += f" Started its wait-time program (PID {helper_process.pid})."
 
         result = {
             "ok": True,
@@ -1375,6 +1685,11 @@ def program_preset_from_web(nickname):
         print(f"[WEB PRESET] {message}")
         return result
     except Exception as e:
+        if helper_process is not None:
+            stop_idle_wait_program(
+                helper_process,
+                reason=f"after radio preset {nickname!r} failed",
+            )
         message = f"Could not program preset {nickname!r}: {e}"
         result = {
             "ok": False,
@@ -1499,22 +1814,25 @@ def command_from_yaml_value(value):
     return shlex.split(str(value), posix=(os.name != "nt"))
 
 
-def start_idle_wait_program():
-    """Start the external wait-time program selected by the configured idle preset.
+def start_idle_wait_program(preset_nickname=None):
+    """Start the external wait-time program for a preset.
+
+    When ``preset_nickname`` is omitted, use ``radio_idle_preset_nickname``
+    from bqe_config/my_rig.yaml.  A caller such as the web preset handler can
+    supply a nickname so the helper belongs to the preset the operator actually
+    selected instead of the configured default idle preset.
 
     Expected flow:
-      1. Read radio_idle_preset_nickname from bqe_config/my_rig.yaml. This is global
-         for all satellite types,  and needs to be within the capabilities of the radio
-         being used. 
+      1. Use the supplied preset nickname, or read radio_idle_preset_nickname
+         from bqe_config/my_rig.yaml for an automatic idle transition.
 
       2. Find a YAML preset under presets/ whose nickname matches that value.
 
       3. Read that preset's tuning and  program_to_run_while_waiting values.
 
-      4. Tune the radio to the frequency and mode specified in the radio_idle_preset_nickname
-         metadata.
-
-      5. If specified in the preset yaml, launch the 'program_to_run_while_waiting'.  
+      4. The caller must finish tuning before calling this helper.
+         If a program is specified, wait idle_tuning_delay_seconds from
+         general_settings.yaml, then launch program_to_run_while_waiting.
 
     Note: radio_idle_preset_nickname is a preset nickname.  The nickname metadata contains
       information on where to tune the radio before releasing Hamlib control,  and can optionally
@@ -1532,26 +1850,26 @@ def start_idle_wait_program():
         print("Warning: PyYAML not available; skipping idle wait program.")
         return None
 
-    radio_config_path = os.path.join(SCRIPT_DIR, "bqe_config", "my_rig.yaml")
-    try:
-        with open(radio_config_path, "r", encoding="utf-8") as f:
-            radio_cfg = yaml.safe_load(f) or {}
-        idle_preset_nickname = radio_cfg.get("radio_idle_preset_nickname")
-    except FileNotFoundError:
-        print(f"Warning: rig config file {radio_config_path} not found. Skipping idle wait program.")
-        return None
-    except Exception as e:
-        print(f"Warning: Could not parse rig config file {radio_config_path}: {e}. Skipping idle wait program.")
-        return None
+    idle_preset_nickname = preset_nickname
+    if idle_preset_nickname is None:
+        radio_config_path = os.path.join(SCRIPT_DIR, "bqe_config", "my_rig.yaml")
+        try:
+            with open(radio_config_path, "r", encoding="utf-8") as f:
+                radio_cfg = yaml.safe_load(f) or {}
+            idle_preset_nickname = radio_cfg.get("radio_idle_preset_nickname")
+        except FileNotFoundError:
+            print(f"Warning: rig config file {radio_config_path} not found. Skipping idle wait program.")
+            return None
+        except Exception as e:
+            print(f"Warning: Could not parse rig config file {radio_config_path}: {e}. Skipping idle wait program.")
+            return None
 
     if not idle_preset_nickname or idle_preset_nickname == 'None' or idle_preset_nickname == '':
-        print("Warning: radio_idle_preset_nickname is not set in my_rig.yaml. Skipping idle wait program.")
+        print("Warning: no idle preset nickname is set. Skipping idle wait program.")
         return None
 
     idle_preset_nickname = str(idle_preset_nickname).strip()
-    if not sleep_until_shutdown_or_timeout(5):  # Wait a bit before switching to idle tasks for enhanced user experience.
-        return None
-
+    program_to_run = None
     try:
         idle_preset_cfg = load_preset_config_by_nickname(idle_preset_nickname)
         if not idle_preset_cfg:
@@ -1561,7 +1879,7 @@ def start_idle_wait_program():
             )
             return None
 
-        program_to_run = idle_preset_cfg.get("program_to_run_while_waiting") # We do not currently allow arguments
+        program_to_run = idle_preset_cfg.get("program_to_run_while_waiting")
         if not program_to_run:
             print(
                 f"[INFO] Idle preset {idle_preset_nickname!r} was found in "
@@ -1573,6 +1891,11 @@ def start_idle_wait_program():
         command = command_from_yaml_value(program_to_run)
         if not command:
             print(f"[INFO]: program_to_run_while_waiting for idle preset {idle_preset_nickname!r} is empty.")
+            return None
+
+        tuning_delay = GENERAL_SETTINGS["idle_tuning_delay_seconds"]
+        print(f"[INFO] Waiting {tuning_delay:g} seconds after tuning before launching the idle program.")
+        if not sleep_until_shutdown_or_timeout(tuning_delay):
             return None
 
         print("[INFO] Starting idle wait program while waiting for next satellite")
@@ -1610,12 +1933,15 @@ def start_idle_wait_program():
     return None
 
 
-def stop_idle_wait_program(process=None, pid_file=IDLE_WAIT_PROGRAM_PID_FILE):
-    """Stop an idle wait program that was started before a scheduled pass.
+def stop_idle_wait_program(
+        process=None,
+        pid_file=IDLE_WAIT_PROGRAM_PID_FILE,
+        reason="before satellite pass starts"):
+    """Stop an idle wait program before a pass or another preset replaces it.
 
-    This intentionally stops the idle program just before tracking begins.  It is
-    cross-platform: Windows uses taskkill /T /F to include child processes, and
-    Linux/macOS use the process group created by start_new_session=True.
+    It is cross-platform: Windows uses taskkill /T /F to include child
+    processes, and Linux/macOS use the process group created by
+    start_new_session=True.
     """
     global CURRENT_IDLE_PROCESS
 
@@ -1635,7 +1961,8 @@ def stop_idle_wait_program(process=None, pid_file=IDLE_WAIT_PROGRAM_PID_FILE):
             CURRENT_IDLE_PROCESS = None
         return
 
-    print(f"Stopping idle wait program PID {pid} before satellite pass starts...")
+    reason_text = str(reason or "").strip() or "during idle-program cleanup"
+    print(f"Stopping idle wait program PID {pid} {reason_text}...")
     try:
         if os.name == "nt":
             subprocess.run(
@@ -1676,7 +2003,7 @@ def stop_idle_wait_program(process=None, pid_file=IDLE_WAIT_PROGRAM_PID_FILE):
         if CURRENT_IDLE_PROCESS is process:
             CURRENT_IDLE_PROCESS = None
         with STATE_LOCK:
-            APP_STATE["last_message"] = "Stopped idle wait program before satellite pass."
+            APP_STATE["last_message"] = f"Stopped idle wait program {reason_text}."
 
 
 def terminate_popen_process(process, process_name="process", timeout=10):
@@ -1710,6 +2037,8 @@ def terminate_popen_process(process, process_name="process", timeout=10):
 def cleanup_helper_programs():
     """Stop helper programs launched by the scheduler or active pass."""
     global CURRENT_TRACKING_PROCESS, CURRENT_IDLE_PROCESS, CURRENT_WEB_COMMAND_PROCESS
+
+    stop_audio_recording()
 
     terminate_popen_process(CURRENT_WEB_COMMAND_PROCESS, "web command process")
     CURRENT_WEB_COMMAND_PROCESS = None
@@ -1814,17 +2143,22 @@ def do_while_waiting():  # The specific waiting task is defined as radio_idle_pr
     print("Switching to idle radio task while waiting for next satellite\n")
     print("Idle task nickname is ", nickname )
     if nickname is not None and nickname != '':
+        # Preserve the automatic idle transition pause, then release any old
+        # companion's radio access before tuning and launching the new one.
+        if not sleep_until_shutdown_or_timeout(5):
+            return None
+        stop_idle_wait_program(reason=f"before applying idle preset {nickname!r}")
         idle_task_ctl.program_preset_by_nickname(nickname)
+        helper_process = start_idle_wait_program(preset_nickname=nickname)
         try:
             begin_idle_task_status(nickname)
         except Exception as e:
             print(f"Warning: could not create {IDLE_TASK_STATUS_FILE}: {e}")
     else:
         print("[INFO] Idle_preset_nickname not defined.  Skipping idle task start")
+        helper_process = None
 
-    # Optional command helper program (such as wsjtx) that can run while the radio is waiting.
-    # useful for monitoring wspr, sstv etc. between passes.
-    return start_idle_wait_program()
+    return helper_process
 
 
 def row_status(pass_entry, now=None):
@@ -2666,6 +3000,18 @@ def handle_web_command(action, request_payload=None):
     action = str(action or "").strip().lower()
     request_payload = request_payload if isinstance(request_payload, dict) else {}
 
+    if action in ("start_audio_recording", "stop_audio_recording"):
+        return control_audio_recording(action)
+
+    if action == "environment_diagnostics":
+        try:
+            report = run_environment_diagnostics(emit=False)
+            return {"ok": True, "action": action, "report": report,
+                    "warnings": report.count("[WARNING]")}
+        except Exception as exc:
+            return {"ok": False, "action": action,
+                    "message": f"Environment Diagnostics failed: {exc}"}
+
     if action == "program_preset":
         return program_preset_from_web(request_payload.get("nickname"))
 
@@ -3454,6 +3800,9 @@ def status_payload():
             APP_STATE["last_message"] = f"Schedule refresh failed: {e}"
 
     observer_location = load_observer_location()
+    recording_status = audio_recording_status()
+    from plugins.bqe_sound_recorder.bqe_sound_recorder import external_recording_status
+    pass_recording_status = external_recording_status()
     tracking_status = augment_tracking_status_for_map(read_tracking_status(), observer_location)
     fdt_console_status = read_fdt_console_status()
     fdt_console_status = update_test_pass_fdt_console_status(
@@ -3507,6 +3856,8 @@ def status_payload():
             "message": APP_STATE["last_message"],
             "tracking_running": APP_STATE["tracking_running"],
             "pass_active": pass_active,
+            "audio_recording": recording_status,
+            "external_audio_recording": pass_recording_status,
             "current_satellite": APP_STATE["current_satellite"],
             "current_log": APP_STATE["current_log"],
             "tracking_status": tracking_status,
@@ -3606,6 +3957,7 @@ def start_web_console(port=None):
 
 def main():
     restore_default_keyboard_interrupt_handler()
+    run_environment_diagnostics()
     # Clear temporary/stale runtime files left by a previous scheduler process.
     remove_idle_task_status_file()
     clear_antenna_tracking_override()
@@ -3629,7 +3981,6 @@ def main():
         # This is important for Tracking > Run test pass now: the new entry is inserted
         # only ten seconds in the future and must be noticed even when the original
         # schedule was empty or the scheduler was waiting for a much later pass.
-        idle_process = None
         idle_for_key = None
         no_pending_message_printed = False
 
@@ -3660,10 +4011,6 @@ def main():
             ]
 
             if not pending:
-                if idle_process is not None:
-                    stop_idle_wait_program(idle_process)
-                    idle_process = None
-                    idle_for_key = None
                 if not no_pending_message_printed:
                     print(f"[INFO] No pending passes in {SCHEDULE_FILE}. Waiting for schedule changes.")
                     with STATE_LOCK:
@@ -3684,9 +4031,8 @@ def main():
                 # the schedule. Re-evaluate the schedule every second so a newly
                 # inserted test pass can become the next pass immediately.
                 if idle_for_key != entry["_key"]:
-                    if idle_process is not None:
-                        stop_idle_wait_program(idle_process)
-                    idle_process = do_while_waiting()
+                    stop_idle_wait_program()
+                    do_while_waiting()
                     idle_for_key = entry["_key"]
 
                 remaining = (start_time - now).total_seconds()
@@ -3694,10 +4040,10 @@ def main():
                 sleep_until_shutdown_or_timeout(wait_seconds)
                 continue
 
-            if idle_process is not None:
-                stop_idle_wait_program(idle_process)
-                idle_process = None
-                idle_for_key = None
+            # CURRENT_IDLE_PROCESS is authoritative because a helper may have
+            # been replaced asynchronously by a web preset selection.
+            stop_idle_wait_program()
+            idle_for_key = None
 
             if SHUTDOWN_EVENT.is_set():
                 break
@@ -3710,8 +4056,7 @@ def main():
             print("[OK] Pass complete. Re-reading schedule...\n")
             sleep_until_shutdown_or_timeout(0.25)
 
-        if idle_process is not None:
-            stop_idle_wait_program(idle_process)
+        stop_idle_wait_program()
 
         if SHUTDOWN_EVENT.is_set():
             print("\n[INFO] Shutdown requested. Exiting BQE WISP.")

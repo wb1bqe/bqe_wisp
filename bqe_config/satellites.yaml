@@ -21,6 +21,13 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
+    program_to_run_during_pass:
+      - python.exe
+      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
+      - --input-device
+      - USB Audio CODEC
+      - --output
+      - plugins/bqe_sound_recorder/recordings/ao-123
 
   - nickname: "io-86"  # Only visible in low latitudes.  
     satellite_type: "FM Voice"
@@ -130,6 +137,22 @@ satellites:
     auto_schedule: True
     program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
 
+  - nickname: "iss-sstv"
+    satellite_type: "FM Voice"
+    satellite_name: "ISS"
+    catalog_number: '25544'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '437.550'
+    downlink_mode: 'FM'
+    uplink_frequency_mhz: '145.990'
+    uplink_mode: 'FM'
+    bandwidth: '25000'
+    ctcss_tone: '67.0'
+    enable_antenna_tracking: True   # 2m antennas are not currently mounted
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass: "C:/Ham/MMSSTV/MMSSTV.EXE"
 
   - nickname: "iss-rpt"
     satellite_type: "FM Voice"
@@ -145,7 +168,7 @@ satellites:
     enable_antenna_tracking: True   # 2m antennas are not currently mounted
     enable_tuning: True
     priority: '3'
-    auto_schedule: True
+    auto_schedule: False
     program_to_run_during_pass:
       - python.exe
       - plugins/bqe_sound_recorder/bqe_sound_recorder.py
@@ -274,6 +297,13 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
+    program_to_run_during_pass:
+      - python.exe
+      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
+      - --input-device
+      - USB Audio CODEC
+      - --output
+      - plugins/bqe_sound_recorder/recordings/ao-91
 
   - nickname: "ao-07-beacon"
     satellite_type: "Linear"
@@ -465,7 +495,7 @@ satellites:
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
-    auto_schedule: True
+    auto_schedule: False
     program_to_run_during_pass:
       - python.exe
       - plugins/bqe_sound_recorder/bqe_sound_recorder.py
@@ -473,3 +503,45 @@ satellites:
       - USB Audio CODEC
       - --output
       - plugins/bqe_sound_recorder/recordings/cute-1
+
+  - nickname: "fo-29-transponder"
+    satellite_type: "LINEAR"
+    transponder_type: "INVERTING"
+    satellite_name: "FO-29"
+    catalog_number: '24278'
+    satellite_mode_required: True
+    downlink_frequency_range_mhz: '435.800-435.900'
+    downlink_frequency_mhz: '435.860' # Midpoint
+    downlink_mode: 'USB'
+    uplink_frequency_range_mhz: '145.900-146.000'
+    uplink_frequency_mhz: '145.960'   # Midpoint
+    uplink_mode: 'LSB'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: False
+
+  - nickname: "fo-29-beacon"
+    satellite_type: "beacon"
+    satellite_name: "FO-29"
+    catalog_number: '24278'
+    satellite_mode_required: True
+    downlink_frequency_mhz: '435.795' #
+    downlink_mode: 'USB'
+    uplink_frequency_mhz: '145.960'   # Not used
+    uplink_mode: 'LSB'
+    bandwidth: '16000'
+    ctcss_tone: '0'
+    enable_antenna_tracking: True
+    enable_tuning: True
+    priority: '3'
+    auto_schedule: True
+    program_to_run_during_pass:
+      - python.exe
+      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
+      - --input-device
+      - USB Audio CODEC
+      - --output
+      - plugins/bqe_sound_recorder/recordings/fo-29

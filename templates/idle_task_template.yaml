@@ -9,4 +9,6 @@ repeater_shift: ""    # +, - or 0 or leave blank
 ctcss_tone: "0"
 bandwidth: ""
 power: ""
+squelch_level: .1
+agc: medium           #Disabled, slow, medium, fast
 program_to_run_while_waiting: ""

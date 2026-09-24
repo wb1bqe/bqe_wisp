@@ -7,7 +7,9 @@ monitor source, encodes continuously to MP3, and provides a local web console.
 ## What it does
 
 - Starts recording as soon as the program launches.
-- Opens a web console at <http://127.0.0.1:8765>.
+- Provides an optional web console at <http://127.0.0.1:8765> without opening
+  a browser tab automatically. Use `--open-browser` to open it on launch;
+  the existing `--no-browser` option remains supported.
 - Captures playback audio, not the microphone.
 - Shows recording state, elapsed time, selected output device, filename, and
   current file size.
@@ -17,6 +19,33 @@ monitor source, encodes continuously to MP3, and provides a local web console.
   or send the process a normal termination signal.
 
 Closing the browser tab does not stop the recording.
+
+## Recording from BQE WISP
+
+Select **Audio > Record Audio** between passes. The item changes to **Stop
+Recording** while capture is starting or running. Stopping saves an MP3 named
+`Audio Recording 2026-09-22_14-30-00.mp3` in the recordings directory configured
+under `plugins.bqe_sound_recorder.recordings` in `general_settings.yaml`.
+
+This uses the same recorder and encoder as pass recording, with the source,
+sample rate, and bitrate from the first `bqe_sound_recorder.py` command in
+`satellites.yaml`. If no such command is configured, the recorder uses its
+default playback source and encoding settings. The audio dependencies must
+be installed in the Python environment running BQE WISP.
+
+A scheduled or test pass stops and finalizes this recording before starting
+tracking. The menu cannot start another recording while a pass is active;
+existing recording configured for satellite passes continues to work as before.
+Exit and Restart Server also stop and save menu recordings.
+
+The main BQE WISP status panel shows a flashing blue light and **Recording**
+label while capture is in progress. This covers menu recordings and the
+bundled recorder running during passes. The light clears when capture stops
+or fails; a forcibly terminated pass recorder's status expires within five
+seconds, plus the main page's refresh interval. With reduced-motion enabled
+in the browser or operating system, the light stays steadily blue instead.
+Pass recorders publish a small heartbeat in `logs/audio_recorder_status.json`;
+the indicator does not assume that a scheduled pass is necessarily recording.
 
 ## Requirements
 

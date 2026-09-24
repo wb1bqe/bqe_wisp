@@ -4,4 +4,6 @@ type: "HF"
 frequency_hz: "14230000"
 mode: "USB"
 bandwidth: "3000"
+agc: medium
+squelch_level: disabled
 program_to_run_while_waiting: "c:/ham/mmsstv/mmsstv.exe"

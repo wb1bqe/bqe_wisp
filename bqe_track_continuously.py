@@ -877,10 +877,10 @@ def start_pass_program(program_to_run, pid_file):
     print("[INFO] Current Python:", sys.executable)
     pass_program_stop_file = None
     popen_kwargs = {}
-    if any("sound_recorder" in os.path.basename(part).lower() for part in cmd):
-        # The recorder understands this environment variable and will flush the
-        # MP3 encoder, close the .part file, and rename it before exiting.  A
-        # file request works identically on Windows and Linux.
+    if any(any(name in os.path.basename(part).lower() for name in
+               ("sound_recorder", "bqe_tlm_decoder")) for part in cmd):
+        # Audio plugins use this request to finish recording/packet logs before
+        # exiting. A file request works identically on Windows and Linux.
         pass_program_stop_file = (pid_file + ".stop") if pid_file else None
         if pass_program_stop_file:
             try:
@@ -929,7 +929,7 @@ def stop_pass_program(proc, timeout_seconds=PROCESS_STOP_TIMEOUT_SECONDS):
                 proc.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 if stop_file:
-                    print("Recorder did not finish after the clean-stop timeout; terminating it...")
+                    print("Pass program did not finish after the clean-stop timeout; terminating it...")
                     proc.terminate()
                     try:
                         proc.wait(timeout=timeout_seconds)
@@ -1041,6 +1041,8 @@ def main():
     ap.add_argument("--uplink_frequency_mhz", type=float, default=None, help="Uplink frequency in MHz. Overrides YAML/default if supplied.")
     ap.add_argument("--uplink_mode", type=str, default=None, help="Uplink mode. Overrides YAML/default if supplied.")
     ap.add_argument("--ctcss_tone", type=str, default=None, help='CTCSS tone for FM sat, or 0 if not required.')
+    ap.add_argument("--squelch_level", default=None, help="Receiver squelch, 0.0 to 1.0 (overrides satellite YAML; default: 0.0).")
+    ap.add_argument("--agc", default=None, help="AGC: fast, medium, slow, or disabled (overrides satellite YAML; default: disabled).")
     ap.add_argument("--satellite_mode_required", type=str, default=None, help="Enable rig satellite_mode. Overrides YAML/default if supplied.")
     ap.add_argument("--enable_antenna_tracking", type=str, default=None, help="Enable antenna tracking. Overrides YAML/default if supplied.")
     ap.add_argument("--antenna_tracking_override_file", type=str, default=None, help="Optional runtime override file written by bqe_wisp.py. Its enable_antenna_tracking value temporarily overrides YAML/CLI.")
@@ -1158,6 +1160,12 @@ def main():
     downlink_freq_hz = downlink_frequency_mhz * 1e6
     uplink_freq_hz = uplink_frequency_mhz * 1e6 if uplink_frequency_mhz > 0 else 0
     ctcss_tone = cli_override(args.ctcss_tone, satellite_config.get("ctcss_tone"), GENERAL_SETTINGS["default_ctcss_tone"])
+    # Reset receiver levels for every pass instead of inheriting the previous
+    # satellite/preset settings. Per-satellite YAML and CLI values override these.
+    squelch_level = rig.normalize_squelch_level(
+        cli_override(args.squelch_level, satellite_config.get("squelch_level"), 0.0)
+    ) or 0.0
+    agc = rig.normalize_agc(cli_override(args.agc, satellite_config.get("agc"), "disabled")) or "disabled"
 
     satellite_mode_required = parse_bool(cli_override(args.satellite_mode_required, satellite_config.get("satellite_mode_required"), GENERAL_SETTINGS["default_satellite_mode_required"]))
     enable_antenna_tracking = parse_bool(cli_override(args.enable_antenna_tracking, satellite_config.get("enable_antenna_tracking"), GENERAL_SETTINGS["default_enable_antenna_tracking"]))
@@ -1254,6 +1262,13 @@ def main():
             do_satellite_setup(uplink_frequency_mhz, uplink_mode, downlink_frequency_mhz, downlink_mode, ctcss_tone, radio_type, rigctld_port, radio_ft736r_intermediate_frequency_mhz)
         else:
             print("{timestamp_utc} Satellite mode setup disabled by satellite config or CLI.")
+
+        # Apply to receive-only passes too, after any mode/VFO setup.
+        if squelch_level is not None:
+            rig.rigctld_set_squelch_level(squelch_level, rigctld_port)
+
+        if agc is not None:
+            rig.rigctld_set_agc(agc, rigctld_port)
         
         sleep_interval = SLEEP_INTERVAL_SECONDS
         high_elev_sleep_interval = SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS

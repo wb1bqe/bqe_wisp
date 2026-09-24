@@ -10,6 +10,15 @@ the CLI, or the entire parameter set can be specified on the CLI.
 
 Example: python bqe_hamlib_interface.py  --remote_channel_config "bqe_config/6m_wachusett_repeater.yaml"
 
+Optional operating YAML setting: squelch_level: 0.0 (Hamlib SQL, range 0.0-1.0).
+Zero opens the squelch; omitted/null settings leave it unchanged. The CLI option
+--squelch_level overrides YAML. Preset YAML and satellite entries support the same
+setting through rigctl and rigctld, respectively, when the radio supports SQL.
+The optional agc setting accepts fast, medium, slow, or disabled (case-insensitive), with
+--agc as a CLI override. Omitted/null settings leave AGC unchanged.
+Satellite tracking defaults to squelch_level: 0.0 and agc: disabled for each pass,
+unless overridden by that satellite's YAML entry or the tracking CLI options.
+
 """
 
 
@@ -20,6 +29,68 @@ import socket # Used by rigctld
 import subprocess
 import time
 import yaml  # pip install PyYaml on windows 10. 
+
+# Used by the legacy rigctl helpers; main() loads the station baud rate.
+radio_baud = ""
+
+AGC_LEVELS = {"fast": 2, "medium": 5, "slow": 3, "disabled": 0}
+
+
+def normalize_agc(value):
+    """Validate an optional AGC name before issuing radio commands."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str) and value.strip().lower() in AGC_LEVELS:
+        return value.strip().lower()
+    raise ValueError("agc must be fast, medium, slow, or disabled")
+
+
+def hamlib_set_agc(radio_type, radio_port, agc, radio_baud=None):
+    """Set receiver AGC using Hamlib's numeric AGC enumeration."""
+    agc = normalize_agc(agc)
+    if agc is None:
+        return None
+    _, executable = which_rigctl()
+    cmd = [executable, "-m", str(radio_type), "-r", str(radio_port)]
+    if radio_baud:
+        cmd += ["-s", str(radio_baud)]
+    cmd += ["L", "AGC", str(AGC_LEVELS[agc])]
+    result = do_hamlib_cmd(cmd)
+    if result is not None:
+        report_status(result)
+    return result
+
+
+def normalize_squelch_level(value):
+    """Return an optional Hamlib SQL level (0.0 through 1.0)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("squelch_level must be a number from 0.0 to 1.0")
+    try:
+        level = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("squelch_level must be a number from 0.0 to 1.0") from None
+    if not 0.0 <= level <= 1.0:
+        raise ValueError("squelch_level must be a number from 0.0 to 1.0")
+    return level
+
+
+def hamlib_set_squelch_level(radio_type, radio_port, squelch_level, radio_baud=None):
+    """Set receiver squelch using rigctl; omitted levels leave it unchanged."""
+    level = normalize_squelch_level(squelch_level)
+    if level is None:
+        return None
+    _, executable = which_rigctl()
+    cmd = [executable, "-m", str(radio_type), "-r", str(radio_port)]
+    if radio_baud:
+        cmd += ["-s", str(radio_baud)]
+    cmd += ["L", "SQL", str(level)]
+    result = do_hamlib_cmd(cmd)
+    if result is not None:
+        report_status(result)
+    return result
+
 
 def report_status(result):
     print(result)
@@ -157,6 +228,26 @@ def which_rigctl():
     return(platform, platform_rigctl)
 
 ############# RIGCTLD Routines ###############
+
+def rigctld_set_agc(agc, rigctld_port):
+    """Set receiver AGC via rigctld; omitted values leave it unchanged."""
+    agc = normalize_agc(agc)
+    if agc is None:
+        return None
+    response = send_rig_command(f"L AGC {AGC_LEVELS[agc]}", rigctld_port)
+    print(response)
+    return response
+
+def rigctld_set_squelch_level(squelch_level, rigctld_port):
+    """Set receiver squelch using the same SQL level as rigctl."""
+    level = normalize_squelch_level(squelch_level)
+    if level is None:
+        return None
+    response = send_rig_command(f"L SQL {level}", rigctld_port)
+    print(response)
+    return response
+
+
 def rigctld_enable_satellite_mode(rigctld_port):
     cmd = "S 1 Sub"
     print(send_rig_command(cmd, rigctld_port))
@@ -306,6 +397,7 @@ def start_rigctld(radio_type, radio_port, radio_baud, rigctld_port):
 
 
 def main():
+    global radio_baud
 
     # Supported modes and corresponding bandwidths.
     supported_modes = {
@@ -339,6 +431,8 @@ def main():
     ap.add_argument("--repeater_shift", type=str, default="")
     ap.add_argument("--repeater_offset_khz", type=str, default="")
     ap.add_argument("--ctcss_tone", type=str, default="")
+    ap.add_argument("--squelch_level", default=None, help="Receiver squelch, 0.0 to 1.0 (overrides YAML).")
+    ap.add_argument("--agc", default=None, help="AGC: fast, medium, slow, or disabled (overrides YAML).")
 
     args = ap.parse_args()
 
@@ -376,6 +470,8 @@ def main():
         desired_repeater_shift = args.repeater_shift or st_cfg.get("repeater_shift", "")
         desired_repeater_offset_khz = args.repeater_offset_khz or st_cfg.get("repeater_offset_khz", "")
         desired_ctcss_tone = args.ctcss_tone or st_cfg.get("ctcss_tone", "")
+        desired_squelch_level = args.squelch_level if args.squelch_level is not None else st_cfg.get("squelch_level")
+        desired_agc = args.agc if args.agc is not None else st_cfg.get("agc")
 
         print("[INFO] [Remote Channel Config]")
         print(f"  frequency_hz={desired_frequency_hz}")
@@ -391,6 +487,12 @@ def main():
         desired_repeater_shift = args.repeater_shift
         desired_repeater_offset_khz = args.repeater_offset_khz
         desired_ctcss_tone = args.ctcss_tone
+        desired_squelch_level = args.squelch_level
+        desired_agc = args.agc
+
+    # Validate before issuing any radio commands, including when the value is zero.
+    desired_squelch_level = normalize_squelch_level(desired_squelch_level)
+    desired_agc = normalize_agc(desired_agc)
 
     # -------------------------------------------------------------
     # Execute operations
@@ -405,6 +507,12 @@ def main():
             hamlib_set_mode(radio_type, radio_port, desired_mode, bw)
         else:
             print(f"Unsupported mode: {desired_mode}")
+
+    if desired_squelch_level is not None:
+        hamlib_set_squelch_level(radio_type, radio_port, desired_squelch_level, radio_baud)
+
+    if desired_agc is not None:
+        hamlib_set_agc(radio_type, radio_port, desired_agc, radio_baud)
 
     if desired_mode == "FM":
 

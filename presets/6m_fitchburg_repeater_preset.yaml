@@ -7,4 +7,6 @@ bandwidth: "16000"  # Overridden in all cases in the code right now.
 repeater_offset_khz: "1000"
 repeater_shift: "-"
 ctcss_tone: "71.9"
+agc: medium
+squelch_level: .25
 power: 50  # watts
