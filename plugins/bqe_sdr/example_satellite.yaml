@@ -1,0 +1,15 @@
+# Add these keys to a satellite you already track. No satellite is enabled automatically.
+receive_sdr: true
+sdr_only: true             # No physical radio/CAT access for this pass
+enable_tuning: true        # Follow the tracker's Doppler-corrected downlink
+downlink_frequency_mhz: '145.800'
+downlink_mode: FM
+bandwidth: '25000'
+decode_sstv_images: true   # Subscribes to SDR audio automatically
+# decode_telemetry: true
+# decode_ssdv_images: true
+# Optional per-pass overrides:
+sdr:
+  record_audio: true
+  record_iq: false
+# Remove a legacy USB-soundcard recorder command for this pass if you only want SDR audio.

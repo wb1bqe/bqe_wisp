@@ -1,0 +1,36 @@
+# Merge selected entries into bqe_config/satellites.yaml; verify current RF status first.
+satellites:
+  - nickname: meteor-m2-4-lrpt
+    satellite_name: METEOR-M2 4
+    satellite_type: Weather LRPT
+    catalog_number: '59051'
+    downlink_frequency_mhz: '137.100'
+    downlink_mode: NFM # Display placeholder; LRPT bypasses audio demodulation entirely.
+    uplink_frequency_mhz: '0'
+    uplink_mode: NFM
+    satellite_mode_required: false
+    enable_antenna_tracking: false
+    enable_tuning: false # Fixed wideband IQ capture; SatDump performs carrier recovery.
+    auto_schedule: false
+    priority: '3'
+    decode_lrpt_images: true
+    lrpt:
+      satellite: M2-4
+      symbol_rate: 72000
+  - nickname: meteor-m2-3-lrpt
+    satellite_name: METEOR-M2 3
+    satellite_type: Weather LRPT
+    catalog_number: '57166'
+    downlink_frequency_mhz: '137.900'
+    downlink_mode: NFM
+    uplink_frequency_mhz: '0'
+    uplink_mode: NFM
+    satellite_mode_required: false
+    enable_antenna_tracking: false
+    enable_tuning: false
+    auto_schedule: false
+    priority: '3'
+    decode_lrpt_images: true
+    lrpt:
+      satellite: M2-3
+      symbol_rate: 72000

@@ -81,6 +81,8 @@ def main():
     do_update("keps.tmp", tisat1_url, "a")       # Tisat1 (cw beacon)
     do_update("keps.tmp", cute1_url, "a")        # co-55 cute-1
     do_update("keps.tmp", marina_url, "a")        # marina
+    do_update("keps.tmp", 'https://celestrak.org/NORAD/elements/gp.php?CATNR=59051&FORMAT=3le', "a") # Meteor-M2-4 LRPT
+    do_update("keps.tmp", 'https://celestrak.org/NORAD/elements/gp.php?CATNR=66766&FORMAT=3le', "a") # T.MICRO telemetry
     
 
     remove_blank_lines("keps.tmp", "keps.txt")

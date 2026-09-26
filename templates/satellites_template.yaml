@@ -4,6 +4,10 @@
 # downlink frequencies etc.)
 
 satellites:
+    # Optional per-entry SSTV receiver (automatically opens a live image page):
+    # decode_sstv_images: true  # uses radio_soundcard from my_rig.yaml
+    # decode_telemetry: true    # uses radio_soundcard from my_rig.yaml
+    # decode_ssdv_images: true # RS61 Geoscan images; uses radio_soundcard.
 
     # Every satellite pass defaults to minimum squelch and disabled AGC.
     # Optional per-entry overrides:

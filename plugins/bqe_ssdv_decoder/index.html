@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BQE SSDV Decoder</title>
+<style>
+body{font:16px system-ui;background:#101923;color:#e6edf5;margin:32px auto;padding:0 24px;max-width:1100px}h1{font-size:28px}section{background:#1b2836;padding:20px;border-radius:10px;margin:18px 0}label{display:inline-block;margin:8px}button,select,input{font:inherit;padding:8px;border-radius:5px;max-width:100%;box-sizing:border-box}button{cursor:pointer;background:#75bbff;color:#102030;border:0;margin:6px}button:disabled{opacity:.5;cursor:default}a{color:#9bcbff}#error{color:#ffb0a8}small{color:#b6c8d9}#images{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}figure{margin:0;background:#1b2836;padding:12px;border-radius:8px}img{width:100%;height:240px;object-fit:contain;background:#090e14}figcaption{overflow-wrap:anywhere;font-size:14px;margin-top:8px}#folder{overflow-wrap:anywhere}progress{width:100%}
+</style>
+<style>
+.signal-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px}.signal-grid canvas{width:100%;height:180px;display:block;background:#090e14;border-radius:6px}.signal-grid h3{font-size:16px;margin:0 0 8px}.axis{display:flex;justify-content:space-between;color:#b6c8d9;font-size:12px;margin-top:5px}@media(max-width:700px){.signal-grid{grid-template-columns:1fr}}
+</style>
+<h1>BQE SSDV Decoder</h1>
+<p>RS61 / 239ALFEROV · Geoscan 9600-baud digital images</p>
+<section>
+<label>Audio input <select id="device"><option value="">Default input</option></select></label>
+<label>Channel <input id="channel" type="number" min="0" max="31" value="0" style="width:75px"></label>
+<label>Sample rate <select id="sampleRate"><option value="48000">48,000 Hz</option><option value="44100">44,100 Hz</option></select></label>
+<div><button id="live">Start live audio</button><button id="stop" disabled>Stop and save partial image</button></div>
+<hr><label>Recording <input id="file" type="file" accept=".mp3,.wav,.ogg,.flac,.kiss,.kss"></label><button id="decode">Decode file</button>
+<p><small>Choose your radio input, virtual audio cable, or speaker loopback. Channel 0 is the first channel. Keep squelch open and avoid audio clipping. Recording uploads are limited to 512 MiB.</small></p>
+</section>
+<p id="error" role="alert"></p>
+<section aria-live="polite"><strong id="state">Idle</strong><p id="status"></p><p id="reception">Waiting for RS61 image packets</p><progress id="progress" max="1" value="0" hidden></progress><p id="folder"></p><a id="gallery" target="_blank" rel="noopener" hidden>Open SSTV Gallery ↗</a></section>
+<p><small>Supports RS61 / 239ALFEROV Geoscan image packets at 9600 baud. Use FM discriminator or 9600-baud DATA audio; a narrow voice-audio path may prevent decoding. Missing fragments are marked partial; all valid packets are saved for later replay. Other SSDV transports are not supported by this profile.</small></p>
+<section><h2>Audio monitor</h2><p id="signalStatus">Waiting for audio samples.</p><div class="signal-grid"><div><h3>Waterfall · newest audio at the top</h3><canvas id="waterfall" width="800" height="180" role="img" aria-label="Audio waterfall from 0 to 12000 Hz"></canvas><div class="axis"><span>0 Hz</span><span>3,000</span><span>6,000</span><span>9,000</span><span>12,000 Hz</span></div></div><div><h3>Waveform · automatic vertical scale</h3><canvas id="waveform" width="400" height="180" role="img" aria-label="Waveform of the selected audio channel"></canvas><div class="axis"><span>0 ms</span><span id="waveDuration">20 ms</span></div></div></div><p><small>Waterfall: dark = quiet (−90 dBFS), yellow = strong (−10 dBFS). Use a flat discriminator/DATA audio path with enough bandwidth for 9600 baud. This sampled display shows the channel being decoded; it pauses when capture stops.</small></p></section>
+<section id="previewSection" hidden><h2>Reception in progress</h2><p id="previewStatus"></p><img id="preview" alt="RS61 image currently being received" style="height:auto;max-height:600px"></section>
+<h2>Saved images</h2><p id="empty">Decoded images will appear here and in the SSTV Gallery.</p><div id="images"></div>
+<script>
+const $=id=>document.getElementById(id);let busy=false,lastImages='',previewVersion=-1;
+let signalVersion=-1;
+function drawSignal(s){
+ const signal=s.signal;
+ if(!signal){$('signalStatus').textContent='Waiting for audio samples.';for(const id of ['waterfall','waveform']){const c=$(id);c.getContext('2d').clearRect(0,0,c.width,c.height)}signalVersion=-1;return}
+ $('signalStatus').textContent=`${s.device||s.source||'Audio'} · Channel ${s.channel??0} · ${s.level_dbfs==null?'':s.level_dbfs.toFixed(1)+' dBFS'}${s.state==='running'?'':' · Paused'}`;
+ if(signal.version===signalVersion)return;signalVersion=signal.version;
+ const c=$('waterfall'),ctx=c.getContext('2d'),row=3;
+ ctx.drawImage(c,0,0,c.width,c.height-row,0,row,c.width,c.height-row);
+ for(let x=0;x<c.width;x++){const hz=x/(c.width-1)*12000;const bin=Math.min(signal.spectrum_db.length-1,Math.round(hz/signal.max_hz*(signal.spectrum_db.length-1)));const strength=Math.max(0,Math.min(1,(signal.spectrum_db[bin]+90)/80));ctx.fillStyle=`hsl(${240-190*strength} 90% ${3+57*strength}%)`;ctx.fillRect(x,0,1,row)}
+ const w=$('waveform'),wc=w.getContext('2d');wc.clearRect(0,0,w.width,w.height);wc.strokeStyle='#35495d';wc.beginPath();wc.moveTo(0,w.height/2);wc.lineTo(w.width,w.height/2);wc.stroke();
+ const peak=Math.max(.0001,...signal.waveform.map(Math.abs));wc.strokeStyle=s.clipping?'#ff8b81':'#75bbff';wc.lineWidth=1.5;wc.beginPath();signal.waveform.forEach((value,i)=>{const x=i/(signal.waveform.length-1)*w.width,y=w.height/2-value/peak*w.height*.44;i?wc.lineTo(x,y):wc.moveTo(x,y)});wc.stroke();$('waveDuration').textContent=signal.waveform_ms.toFixed(0)+' ms';
+}
+function options(){return {device:$('device').value,channel:Number($('channel').value),sample_rate:Number($('sampleRate').value)}}
+async function request(path,init){const r=await fetch(path,init);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
+async function action(fn){$('error').textContent='';busy=true;$('live').disabled=$('decode').disabled=true;try{await fn()}catch(e){$('error').textContent=e.message}finally{busy=false;await refresh()}}
+$('live').onclick=()=>action(()=>request('/live',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}));
+$('stop').onclick=()=>action(()=>request('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}));
+$('decode').onclick=()=>action(async()=>{const file=$('file').files[0];if(!file)throw Error('Choose an audio recording or KISS packet file first');if(file.size>512*1024*1024)throw Error('Use --file on the command line for files larger than 512 MiB');await request('/file',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name),'X-Options':JSON.stringify(options())},body:file})});
+async function refresh(){try{const s=await request('/status');const active=['starting','running','stopping'].includes(s.state);$('state').textContent=s.state;$('live').disabled=$('decode').disabled=active||busy;$('stop').disabled=!active||s.state==='stopping';$('status').textContent=`${s.source||''} · ${s.images} images saved · ${(s.audio_seconds||0).toFixed(1)} seconds`+(s.device?' · '+s.device:'')+(s.mode?` · ${s.mode.replaceAll('_',' ')}`:'')+` · ${s.packets||0} valid packets · ${s.image_packets||0} image fragments`+(s.missing_bytes?` · ${s.missing_bytes} missing bytes`:'')+(s.has_start===false?' · JPEG header not yet received':'')+` · ${s.bad_crc||0} rejected CRC candidates`+(s.level_dbfs!=null?` · ${s.level_dbfs.toFixed(1)} dBFS`:'')+(s.clipping?' · Clipping: lower input gain':'');$('reception').textContent=s.reception||'';$('folder').textContent='Saving to: '+s.output+(s.packet_log?' · Packet log: '+s.packet_log:'');$('progress').hidden=s.progress==null;$('progress').value=s.progress||0;$('gallery').hidden=!s.gallery_url;if(s.gallery_url)$('gallery').href=s.gallery_url;if(s.error||s.warning)$('error').textContent=s.error||s.warning;
+$('previewSection').hidden=!s.has_preview;if(s.has_preview&&s.preview_version!==previewVersion){previewVersion=s.preview_version;$('preview').src='/preview.jpg?v='+previewVersion;$('previewStatus').textContent=(s.mode||'RS61').replaceAll('_',' ')+' · '+(s.preview_complete?'Complete image':active?'Receiving — updates about every 2 seconds':'Partial image');}
+drawSignal(s);
+const key=JSON.stringify(s.recent);if(key!==lastImages){lastImages=key;$('empty').hidden=s.recent.length>0;$('images').replaceChildren(...s.recent.slice().reverse().map(p=>{const f=document.createElement('figure'),a=document.createElement('a'),img=document.createElement('img'),c=document.createElement('figcaption');a.href='/image/'+encodeURIComponent(p.filename);a.target='_blank';a.rel='noopener';img.src=a.href;img.alt=p.mode+' decoded image';a.append(img);c.textContent=`${p.mode.replaceAll('_',' ')} · ${p.width}×${p.height} · ${p.complete?'Complete transmission':'Partial transmission'} — ${p.filename}`;f.append(a,c);return f}))}}catch(e){$('error').textContent='Connection: '+e.message}}
+request('/devices').then(ds=>ds.forEach(d=>{const o=document.createElement('option');o.value=d.id;o.textContent=d.name+(d.loopback?' (loopback)':'');$('device').append(o)})).catch(e=>$('error').textContent='Audio devices: '+e.message);
+async function poll(){await refresh();setTimeout(poll,250)}poll();
+</script></html>
+

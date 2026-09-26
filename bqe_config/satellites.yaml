@@ -1,9 +1,13 @@
 
+
 # Every entry must have a unique nickname which is used to search for the 
 # data record.  (This allows for multiple entries for a satellite with different
 # downlink frequencies etc.)
 
 satellites:
+    # Optional per-entry decoders; true uses radio_soundcard from my_rig.yaml:
+    # decode_sstv_images: true
+    # decode_telemetry: true
 
     #https://www.amsat.se/2024/11/29/asrtu-1-designated-asrtu-oscar-123/  sstv
   - nickname: "ao-123"
@@ -15,7 +19,7 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '67.0'
     enable_antenna_tracking: False
     enable_tuning: True
@@ -61,13 +65,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "rs61"
     satellite_type: "SSDV"
@@ -78,13 +84,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
-    auto_schedule: False
-    program_to_run_during_pass:  "tbd" # User supplied SSDV decoder
+    auto_schedule: True
+    decode_ssdv_images: true  # RS61 Geoscan 9600-baud images; uses radio_soundcard.
+
+    program_to_run_during_pass: ''
 
   - nickname: "rs-18s"
     satellite_type: "SSTV"
@@ -95,13 +103,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "MONITOR3"
     satellite_type: "SSTV"
@@ -112,13 +122,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "MONITOR4"
     satellite_type: "SSTV"
@@ -129,13 +141,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "iss-sstv"
     satellite_type: "FM Voice"
@@ -152,7 +166,9 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass: "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "iss-rpt"
     satellite_type: "FM Voice"
@@ -234,13 +250,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "utmn-2"
     satellite_name: "UTMN 2 (RS27S)"
@@ -251,13 +269,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass: ''
 
   - nickname: "so-50"
     satellite_type: "FM Voice"
@@ -268,7 +288,7 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.850'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '67.0'
     enable_antenna_tracking: True
     enable_tuning: True
@@ -291,7 +311,7 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '436.250'
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '67.0'
     enable_antenna_tracking: True
     enable_tuning: True
@@ -349,7 +369,7 @@ satellites:
     uplink_frequency_range_mhz: '145.940-145.980'  # MARKER - Correct this later
     uplink_frequency_mhz: '145.960'   # Midpoint   MARKER - Correct this later
     uplink_mode: 'LSB'
-    bandwidth: '16000'
+    bandwidth: '3000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
@@ -365,13 +385,15 @@ satellites:
     downlink_mode: 'FM'
     uplink_frequency_mhz: '145.800' # Not used - satellite is downlink only.
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:  "C:/Ham/MMSSTV/MMSSTV.EXE"
+    decode_sstv_images: true
+    decode_telemetry: true
+    program_to_run_during_pass:  ''
 
   - nickname: "OTP-2"  # Downlink not available on FT-991a
     satellite_type: "BEACON"
@@ -387,7 +409,15 @@ satellites:
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
-    auto_schedule: False
+    auto_schedule: True
+    program_to_run_during_pass:
+      - python.exe
+      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
+      - --input-device
+      - USB Audio CODEC
+      - --output
+      - plugins/bqe_sound_recorder/recordings/otp-2
+
 
   - nickname: "LASARSAT-beacon"
     satellite_type: "BEACON"
@@ -398,12 +428,14 @@ satellites:
     downlink_mode: 'CW'
     uplink_frequency_mhz: '145.850' # Not used
     uplink_mode: 'FM'
-    bandwidth: '16000'
+    bandwidth: '25000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
     auto_schedule: True
+    #decode_sstv_images: true
+    decode_telemetry: true
     program_to_run_during_pass:
       - python.exe
       - plugins/bqe_sound_recorder/bqe_sound_recorder.py
@@ -427,6 +459,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
+    decode_sstv_images: true
+    decode_telemetry: true
     program_to_run_during_pass:
       - python.exe
       - plugins/bqe_sound_recorder/bqe_sound_recorder.py
@@ -435,7 +469,7 @@ satellites:
       - --output
       - plugins/bqe_sound_recorder/recordings/marmotsat
 
-  - nickname: "MARINA-BEACON"  # Downlink not available on FT-991a
+  - nickname: "MARINA-BEACON"
     satellite_type: "BEACON"
     satellite_name: "MARINA"
     catalog_number: '69920'
@@ -450,6 +484,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
+    decode_sstv_images: true
+    decode_telemetry: true
     program_to_run_during_pass:
       - python.exe
       - plugins/bqe_sound_recorder/bqe_sound_recorder.py
@@ -472,7 +508,7 @@ satellites:
     enable_antenna_tracking: True
     enable_tuning: True
     priority: '3'
-    auto_schedule: True
+    auto_schedule: False
     program_to_run_during_pass:
       - python.exe
       - plugins/bqe_sound_recorder/bqe_sound_recorder.py
@@ -516,7 +552,7 @@ satellites:
     uplink_frequency_range_mhz: '145.900-146.000'
     uplink_frequency_mhz: '145.960'   # Midpoint
     uplink_mode: 'LSB'
-    bandwidth: '16000'
+    bandwidth: '3000'
     ctcss_tone: '0'
     enable_antenna_tracking: True
     enable_tuning: True
@@ -545,3 +581,45 @@ satellites:
       - USB Audio CODEC
       - --output
       - plugins/bqe_sound_recorder/recordings/fo-29
+
+  - nickname: t-micro
+    satellite_name: T.MICRO
+    satellite_type: Telemetry
+    catalog_number: '66766'
+    downlink_frequency_mhz: '401.025'
+    downlink_mode: FM
+    uplink_frequency_mhz: '0'
+    uplink_mode: FM
+    bandwidth: '25000'
+    satellite_mode_required: false
+    enable_antenna_tracking: true
+    enable_tuning: true
+    auto_schedule: true
+    priority: '3'
+    receive_sdr: true
+    sdr_only: true
+    decode_telemetry: true
+    # Record lossless pass audio directly from the same SDR feeding telemetry.
+    sdr:
+      record_audio: true
+      output: plugins/bqe_sdr/recordings/t-micro
+    program_to_run_during_pass: ''
+
+  # Meteor digital weather images: receive full IQ and decode after the pass.
+  - nickname: meteor-m2-4-lrpt
+    satellite_name: METEOR-M2 4
+    satellite_type: Weather LRPT
+    catalog_number: '59051'
+    downlink_frequency_mhz: '137.100'
+    downlink_mode: FM # Display placeholder; LRPT bypasses audio demodulation entirely.
+    uplink_frequency_mhz: '0'
+    uplink_mode: FM
+    satellite_mode_required: false
+    enable_antenna_tracking: true
+    enable_tuning: false # Fixed wideband IQ capture; SatDump performs carrier recovery.
+    auto_schedule: true
+    priority: '3'
+    decode_lrpt_images: true
+    lrpt:
+      satellite: M2-4
+      symbol_rate: 72000

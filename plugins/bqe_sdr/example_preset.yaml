@@ -1,0 +1,11 @@
+# Copy to presets/ if you want this selectable in BQE.
+nickname: sdr_iss_monitor
+channel_name: SDR ISS downlink monitor
+type: VHF
+frequency_hz: '145800000'
+mode: FM
+bandwidth: '25000'
+receive_sdr: true
+sdr_only: true
+decode_sstv_images: true
+program_to_run_while_waiting: ''

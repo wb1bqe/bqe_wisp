@@ -1,0 +1,17 @@
+# Merge the sdr mapping into bqe_config/my_rig.yaml.
+# Your physical-radio settings can stay alongside it for mixed SDR/transceiver use.
+radio_is_sdr: true      # Receive-only SDR for every pass/preset; skips CAT control
+sdr:
+  source: usb           # usb, tcp, file, demo
+  device: '0'           # Or serial:00000001
+  sample_rate: 960000
+  gain: null           # Automatic tuner gain; number = manual dB
+  ppm: 0
+  audio_gain: 0.15      # Starting level for unsquelched NFM; adjust as needed
+  port: 8772
+  record_audio: true
+  record_iq: false
+  # library: 'C:/path/to/rtlsdr.dll'  # Or /path/to/librtlsdr.so
+  # source: tcp
+  # host: 192.168.1.50
+  # tcp_port: 1234

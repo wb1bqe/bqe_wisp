@@ -34,6 +34,11 @@ import sys        # Diagnostic information on python location
 import yaml       # For loading configs from YAML
 
 import bqe_hamlib_interface as rig
+from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
+from plugins.bqe_tlm_decoder.integration import TELEMETRY_RECEIVER
+from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
+from plugins.bqe_sdr.integration import SDR_RECEIVER, enabled as sdr_enabled, effective_config
+from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER, enabled as lrpt_enabled
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -878,7 +883,7 @@ def start_pass_program(program_to_run, pid_file):
     pass_program_stop_file = None
     popen_kwargs = {}
     if any(any(name in os.path.basename(part).lower() for name in
-               ("sound_recorder", "bqe_tlm_decoder")) for part in cmd):
+               ("sound_recorder", "bqe_tlm_decoder", "bqe_sstv_decoder")) for part in cmd):
         # Audio plugins use this request to finish recording/packet logs before
         # exiting. A file request works identically on Windows and Linux.
         pass_program_stop_file = (pid_file + ".stop") if pid_file else None
@@ -1204,6 +1209,7 @@ def main():
 
     # ------------------- Radio config: YAML + CLI override -------------------
     rig_config_path = args.radio_config
+    radio_config = {}
     yaml_radio_type = None
     yaml_radio_port = None
     yaml_radio_baud = None
@@ -1249,26 +1255,44 @@ def main():
     # the argument order is explicit and we can verify that the process stays up.
     proc = None
     pass_program_proc = None
-    proc = start_rigctld_process(radio_type, radio_port, radio_baud, rigctld_port)
-    write_rigctld_pid_file(rigctld_pid_file, proc.pid)
+    satellite_config = effective_config(satellite_config, radio_config)
+    use_lrpt = lrpt_enabled(satellite_config)
+    use_sdr = sdr_enabled(satellite_config) and not use_lrpt
+    sdr_only = use_lrpt or (use_sdr and satellite_config.get('sdr_only') is True)
+    if not sdr_only:
+        proc = start_rigctld_process(radio_type, radio_port, radio_baud, rigctld_port)
+        write_rigctld_pid_file(rigctld_pid_file, proc.pid)
 
     try:
+        # Open IQ capture before decoders subscribe to its demodulated audio.
+        sdr_pass_config = dict(satellite_config, downlink_frequency_mhz=downlink_frequency_mhz,
+                               downlink_mode=downlink_mode)
+        if use_lrpt:
+            LRPT_RECEIVER.start(sdr_pass_config, satellite_name, radio_config=radio_config)
+        else:
+            SDR_RECEIVER.start(sdr_pass_config, satellite_name, radio_config=radio_config)
         pass_program_proc = start_pass_program(program_to_run_during_pass, pass_program_pid_file)
         #time.sleep(3) #(Can't do this due to rigctld conflict) Give the companion program time to start to cover cases where radio setup changes its freq. (I.e. wsjtx)
         # Enable split/satellite mode after dictionary values and CLI overrides are resolved.
 
-        if satellite_mode_required:
+        if satellite_mode_required and not sdr_only:
             print("{timestamp_utc} Calling do_satellite_setup with",uplink_frequency_mhz, uplink_mode, downlink_frequency_mhz, downlink_mode, ctcss_tone, radio_type, rigctld_port, radio_ft736r_intermediate_frequency_mhz )
             do_satellite_setup(uplink_frequency_mhz, uplink_mode, downlink_frequency_mhz, downlink_mode, ctcss_tone, radio_type, rigctld_port, radio_ft736r_intermediate_frequency_mhz)
         else:
             print("{timestamp_utc} Satellite mode setup disabled by satellite config or CLI.")
 
         # Apply to receive-only passes too, after any mode/VFO setup.
-        if squelch_level is not None:
+        if squelch_level is not None and not sdr_only:
             rig.rigctld_set_squelch_level(squelch_level, rigctld_port)
 
-        if agc is not None:
+        if agc is not None and not sdr_only:
             rig.rigctld_set_agc(agc, rigctld_port)
+
+        for receiver in (SSTV_RECEIVER, TELEMETRY_RECEIVER, SSDV_RECEIVER):
+            try:
+                receiver.start(satellite_config, satellite_name, radio_config=radio_config)
+            except Exception as exc:
+                print(f'[WARNING] Could not start {receiver.label} reception: {exc}')
         
         sleep_interval = SLEEP_INTERVAL_SECONDS
         high_elev_sleep_interval = SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS
@@ -1547,7 +1571,12 @@ def main():
                 print("Satellite is above the Horizon...  Performing antenna tracking and any enabled radio tuning.")
                 satellite_has_risen = True # Satellite has risen - begin tracking and tuning if enabled.
 
-                if is_linear_satellite:
+                if use_sdr and enable_tuning:
+                    SDR_RECEIVER.tune(downlink_freq_with_doppler_hz)
+
+                if sdr_only:
+                    pass  # Receive-only SDR; no physical radio/CAT commands.
+                elif is_linear_satellite:
                     if fdt_enabled:
                         print("----------------> FDT setting downlink frequency", downlink_freq_with_doppler_hz)
                         rig.rigctld_set_downlink_frequency(downlink_freq_with_doppler_hz, rigctld_port)
@@ -1650,11 +1679,16 @@ def main():
         # Always try to leave the radio and rigctld in a sane state, even if
         # tracking, tuning, TLE parsing, or antenna switching raises an error.
         try:
-            if satellite_mode_required:
+            if satellite_mode_required and not sdr_only:
                 rig.rigctld_disable_satellite_mode(rigctld_port)
         except Exception as e:
             print(f"Warning: could not disable satellite mode cleanly: {e}")
 
+        SSTV_RECEIVER.stop()
+        TELEMETRY_RECEIVER.stop()
+        SSDV_RECEIVER.stop()
+        SDR_RECEIVER.stop()
+        LRPT_RECEIVER.stop()
         stop_pass_program(pass_program_proc)
         remove_pid_file(pass_program_pid_file, "pass program")
 

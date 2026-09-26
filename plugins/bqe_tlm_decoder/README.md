@@ -15,6 +15,12 @@ Python 3.10+ and internet). Dependencies are already installed on this workstati
 On Linux run `sh start_linux.sh`; SoundCard requires a working PulseAudio-compatible
 server. Close with Ctrl+C.
 
+Windows microphones use `sounddevice`/WASAPI for USB codec format compatibility;
+speaker loopback uses SoundCard. After updating an existing installation, run
+`.venv\Scripts\python.exe -m pip install -r requirements.txt` from this directory
+and restart the decoder. Give Windows inputs unique names so the capture backend
+can match the selected device without guessing.
+
 For command-line use, from this plugin directory:
 
 ```powershell
@@ -68,6 +74,45 @@ CRC failures and uncorrectable USP frames are not reported as valid packets.
 Capture overruns stop the job with an error; select fewer rates on slower machines.
 
 ## BQE pass program
+
+To start live decoding automatically for a satellite, set the radio's recording
+input in `bqe_config/my_rig.yaml`:
+
+```yaml
+radio_soundcard: "USB Audio Codec"
+```
+
+Then add this boolean to the appropriate satellite entry in
+`bqe_config/satellites.yaml`:
+
+```yaml
+decode_telemetry: true
+```
+
+Restart BQE after updating the code. At pass start, the decoder uses this input
+and opens its live packet page (normally `http://127.0.0.1:8769`; an available
+port is chosen if occupied). Automatic decoding uses the existing auto protocol
+and 1200/2400/4800/9600 baud settings. Packet JSONL/KISS files are saved under
+`plugins/bqe_tlm_decoder/decoded/`, including the satellite source name.
+At pass end or shutdown it closes capture and flushes files. Loss of its owning
+tracker also requests clean shutdown. Existing per-pass helper programs can
+run alongside it. Omit the key or set it to `false` to disable it. Use an actual
+YAML boolean, not a quoted string. Individual satellites are not automatically
+enabled by this code change.
+
+The soundcard can be a full name, a unique substring, or exact device ID from
+`--list-devices`. Recording inputs are preferred over similarly named loopbacks;
+missing/ambiguous names cause an error rather than recording the default device.
+A missing `radio_soundcard` is a configuration error when a decoder is enabled.
+The tracker honors its `--radio_config` path when selecting this setting.
+
+SSTV also accepts `decode_sstv_images: true` using the same rig soundcard, in
+satellite entries and presets. Its existing string form remains a device override.
+Both decoders may be enabled together, subject to the soundcard supporting shared
+capture. SSTV and telemetry interpret different signals; enabling both does not
+add protocols to either decoder.
+
+For manual pass-program configuration instead:
 
 Set a satellite's existing `program_to_run_during_pass` command to the full path of
 this plugin's `.venv/Scripts/python.exe`, followed by the full path of

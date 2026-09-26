@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """BQE telemetry decoder entry point; live sound card and recorded audio."""
 import argparse
+import io
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent.parent))
 from plugins.bqe_tlm_decoder.service import Session, devices
+from plugins.decoder_http import DecoderServer
 
 
 def handler(session, defaults):
@@ -54,13 +56,19 @@ def handler(session, defaults):
                 self.reply(500, {'error': str(exc)})
 
         def do_POST(self):
-            if not self.allowed():
-                self.reply(403, {'error': 'Local access only'})
-                return
             uploaded = None
             try:
                 self.connection.settimeout(30)
                 length = int(self.headers.get('Content-Length', '0'))
+                incoming = self.rfile
+                # Consume small bodies before rejecting a request. Closing a
+                # Windows socket with unread body bytes can reset the connection
+                # before the client receives our 400/403 response.
+                if 0 < length <= 8192:
+                    incoming = io.BytesIO(self.rfile.read(length))
+                if not self.allowed():
+                    self.reply(403, {'error': 'Local access only'})
+                    return
                 if self.path == '/file':
                     if self.headers.get('Content-Type') != 'application/octet-stream' or not 0 < length <= 512 * 1024 * 1024:
                         raise ValueError('Upload MP3/WAV audio, at most 512 MiB; use --file for larger files')
@@ -76,7 +84,7 @@ def handler(session, defaults):
                     with uploaded.open('wb') as stream:
                         remaining = length
                         while remaining:
-                            block = self.rfile.read(min(65536, remaining))
+                            block = incoming.read(min(65536, remaining))
                             if not block:
                                 raise ValueError('Incomplete upload')
                             stream.write(block)
@@ -86,7 +94,7 @@ def handler(session, defaults):
                 else:
                     if self.headers.get('Content-Type') != 'application/json' or not 0 < length <= 8192:
                         raise ValueError('Expected a small JSON request')
-                    options = json.loads(self.rfile.read(length))
+                    options = json.loads(incoming.read(length))
                     if self.path == '/live':
                         session.start(dict(defaults, **options))
                     elif self.path == '/stop':
@@ -114,6 +122,9 @@ def main():
     parser.add_argument('--protocol', choices=['auto', 'ax25', 'usp'], default='auto')
     parser.add_argument('--output', type=Path, default=ROOT / 'decoded')
     parser.add_argument('--port', type=int, default=8766)
+    parser.add_argument('--source-name', help='Satellite name for live status and saved packet metadata')
+    parser.add_argument('--managed', action='store_true', help='Stop cleanly when the owning BQE process closes stdin')
+    parser.add_argument('--fallback-port', action='store_true', help='Use an available port when the requested port is busy')
     parser.add_argument('--idle', action='store_true', help='Open controls without starting capture')
     parser.add_argument('--no-web', action='store_true', help='Headless capture; files exit at EOF')
     parser.add_argument('--open-browser', action='store_true', help='Explicitly open the controls in a browser')
@@ -127,7 +138,12 @@ def main():
     session = Session(args.output)
     server = None
     if not args.no_web:
-        server = ThreadingHTTPServer(('127.0.0.1', args.port), handler(session, vars(args)))
+        try:
+            server = DecoderServer(('127.0.0.1', args.port), handler(session, vars(args)))
+        except OSError:
+            if not args.fallback_port:
+                raise
+            server = DecoderServer(('127.0.0.1', 0), handler(session, vars(args)))
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True).start()
         url = f'http://127.0.0.1:{server.server_port}'
@@ -135,10 +151,21 @@ def main():
         if args.open_browser:
             import webbrowser
             webbrowser.open(url)
+    owner_closed = threading.Event()
+    if args.managed:
+        def watch_owner():
+            try:
+                while os.read(sys.stdin.fileno(), 1024):
+                    pass
+            finally:
+                owner_closed.set()
+        threading.Thread(target=watch_owner, daemon=True).start()
     try:
         if not args.idle:
             session.start(vars(args), args.file)
         while True:
+            if owner_closed.is_set():
+                break
             if args.stop_file and Path(args.stop_file).exists():
                 break
             status = session.snapshot()

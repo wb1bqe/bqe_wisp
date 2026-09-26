@@ -1,0 +1,2 @@
+-r requirements.txt
+PySSTV==0.5.9

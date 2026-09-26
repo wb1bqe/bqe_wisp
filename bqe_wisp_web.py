@@ -3,6 +3,8 @@
 
 """HTTP request handler for the BQE WISP web console."""
 
+from __future__ import annotations
+
 import html
 import json
 import re
@@ -356,6 +358,18 @@ def _read_rig_config_yaml(path: Union[str, Path] = RIG_CONFIG_PATH) -> dict[str,
     return dict(raw)
 
 
+def sdr_console_url() -> str:
+    """Expose the local console only for a station configured as an SDR."""
+    try:
+        rig = _read_rig_config_yaml(RIG_CONFIG_PATH)
+        if rig.get('radio_is_sdr') is not True:
+            return ''
+        port = int((rig.get('sdr') or {}).get('port', 8772))
+        return f'http://127.0.0.1:{port}/' if 1 <= port <= 65535 else ''
+    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+        return ''
+
+
 def _radio_editable_data() -> dict[str, Any]:
     """Return template fields with existing my_rig.yaml values overlaid when present."""
     #template_data = _read_rig_template_yaml(RIG_TEMPLATE_PATH)
@@ -373,6 +387,8 @@ def _radio_response(message: str = "") -> dict[str, Any]:
     """Build the JSON payload used by the Radio editor dialog."""
     data = _radio_editable_data()
     editable = {str(key): _qth_value_to_text(value) for key, value in data.items()}
+    editable['radio_is_sdr'] = data.get('radio_is_sdr') is True
+    editable['sdr'] = data.get('sdr', {})
     return {
         "ok": True,
        # "template_path": str(RIG_CONFIG_PATH),
@@ -408,6 +424,31 @@ def write_radio_config_payload(request_payload: Mapping[str, Any]) -> Mapping[st
         for key, value in edited_data.items():
             key_text = str(key).strip()
             if not key_text:
+                continue
+            if key_text == 'radio_is_sdr':
+                if not isinstance(value, bool):
+                    raise ValueError('Radio is an SDR must be a boolean.')
+                updated_data[key_text] = value
+                continue
+            if key_text == 'sdr':
+                if not isinstance(value, Mapping):
+                    raise ValueError('SDR settings must be a mapping.')
+                from plugins.bqe_sdr.config import Settings
+                options = dict(existing_data.get('sdr') or {})
+                string_keys = {'source', 'device', 'host', 'library', 'iq_file', 'iq_format', 'output', 'mode', 'source_name'}
+                for option, raw in value.items():
+                    if option in string_keys:
+                        options[option] = str(raw).strip()
+                    elif option in ('gain', 'center') and raw in ('', None, 'null', 'auto'):
+                        options[option] = None
+                    else:
+                        options[option] = _infer_qth_value_type(raw, options.get(option))
+                Settings.from_dict(options)
+                port = int(options.get('port', 8772))
+                if not 1 <= port <= 65535:
+                    raise ValueError('SDR control port must be 1–65535.')
+                options['port'] = port
+                updated_data[key_text] = options
                 continue
             updated_data[key_text] = _infer_qth_value_type(value, existing_data.get(key_text))
 
@@ -1228,7 +1269,7 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
         image_url = "/sstv-image?name=" + quote(image_path.name, safe="")
         modified_timestamp = image_path.stat().st_mtime
         cards.append(
-            '<a class="image-card" href="{url}" target="_blank" rel="noopener" '
+            '<a class="image-card" href="{url}" '
             'title="Open {name} full size" data-filename="{sort_name}" data-mtime="{mtime:.6f}">'
             '<img src="{url}" alt="{name}" loading="lazy">'
             '<span>{name}</span></a>'.format(
@@ -1394,6 +1435,19 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
       background: #102943;
       color: #f7fbff;
     }
+    #imageViewer {
+      width: min(96vw, 1400px);
+      max-height: 94vh;
+      padding: 16px;
+      border: 2px solid #777;
+      background: #d2d2d2;
+      color: #111;
+    }
+    #imageViewer::backdrop { background: rgba(0,0,0,.8); }
+    .viewer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; }
+    #viewerFilename { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+    #viewerImage { display: block; margin: auto; max-width: 100%; height: auto; max-height: 75vh; object-fit: contain; }
+    body.modern-ui #imageViewer { background: #102943; color: #f7fbff; border-color: #3f7199; border-radius: 10px; }
   </style>
 </head>
 <body class="__UI_THEME__-ui">
@@ -1406,7 +1460,26 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
     </div>
   </header>
   __CONTENT__
+  <dialog id="imageViewer" aria-labelledby="viewerFilename">
+    <div class="viewer-toolbar">
+      <button type="button" id="closeImageViewer">&#8592; Back to SSTV Gallery</button>
+      <h2 id="viewerFilename"></h2>
+    </div>
+    <img id="viewerImage" alt="">
+  </dialog>
   <script>
+    const imageViewer = document.getElementById('imageViewer');
+    document.querySelector('.gallery')?.addEventListener('click', event => {
+      const card = event.target.closest('.image-card');
+      if (!card || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      event.preventDefault();
+      const image = document.getElementById('viewerImage');
+      image.src = card.href;
+      image.alt = card.querySelector('img').alt;
+      document.getElementById('viewerFilename').textContent = image.alt;
+      imageViewer.showModal();
+    });
+    document.getElementById('closeImageViewer').addEventListener('click', () => imageViewer.close());
     function sortGallery(sortMode) {
       const gallery = document.querySelector('.gallery');
       if (!gallery) return;
@@ -3835,6 +3908,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       font-size: 17px;
       cursor: pointer;
     }
+    .submenu button[hidden] { display: none; }
     .submenu button:hover,
     .submenu button:focus {
       background: #05058a;
@@ -3965,9 +4039,10 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     /* Radio has longer property names.  Give the labels more room and
        use a narrower value column so the labels remain fully visible. */
     #radioFields {
-      grid-template-columns: 270px 170px;
+      grid-template-columns: minmax(0, 270px) minmax(0, 170px);
       justify-content: start;
     }
+    #radioModal .config-box { max-height: calc(100vh - 40px); overflow-y: auto; }
     #radioFields label {
       text-align: left;
       white-space: nowrap;
@@ -3975,6 +4050,10 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     #radioFields input {
       width: 170px;
     }
+    #radioFields select { width: 170px; }
+    #radioFields input[type="checkbox"] { width: 20px; justify-self: start; }
+    #radioFields [hidden] { display: none; }
+    #radioFields label { white-space: normal; }
     /* Give the Create Preset dialog extra room for long property names
        without changing the QTH or Radio configuration dialogs. */
     #presetFields {
@@ -5113,6 +5192,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         <button type="button" role="menuitem" id="sstvFilesMenuItem">SSTV Gallery</button>
         <button type="button" role="menuitem" id="recordingsMenuItem">Recordings</button>
         <button type="button" role="menuitem" id="logsMenuItem">Logs</button>
+        <button type="button" role="menuitem" id="sdrConsoleMenuItem" hidden>SDR Console</button>
         <button type="button" role="menuitem" id="fdtConsoleMenuItem" disabled>FDT Console</button>
       </div>
     </div>
@@ -5181,6 +5261,9 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
   <dialog id="environmentDiagnosticsDialog" aria-labelledby="environmentDiagnosticsTitle" style="width:min(850px,90vw);max-height:85vh;padding:24px;border:1px solid #5384a5;border-radius:16px;background:#102538;color:#edf6ff;box-shadow:0 24px 80px #0009;">
     <h2 id="environmentDiagnosticsTitle" style="margin:0 0 8px">Environment Diagnostics</h2>
+    <label style="display:block;margin:12px 0"><input type="checkbox" id="environmentDiagnosticsPluginTests"> Run plugin self-tests</label>
+    <p style="color:#b9d9ef;font-size:14px">Optional offline tests use temporary files and take up to two minutes. Missing dependencies are warnings. Tests are skipped during passes and stopped if a pass begins.</p>
+    <button type="button" id="environmentDiagnosticsRun">Run diagnostics</button>
     <p id="environmentDiagnosticsSummary" role="status" style="color:#b9d9ef">Checking the server environment…</p>
     <div id="environmentDiagnosticsResults" tabindex="0" style="max-height:52vh;overflow:auto;background:#091825;border-radius:10px;padding:16px;font:13px/1.65 monospace;white-space:pre-wrap;overflow-wrap:anywhere;"></div>
     <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:18px">
@@ -6617,6 +6700,9 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         const response = await fetch('/api/status', { cache: 'no-store' });
         const data = await response.json();
         const fdtAvailable = Boolean(data.fdt_available);
+        const sdrConsoleItem = document.getElementById('sdrConsoleMenuItem');
+        sdrConsoleItem.hidden = !data.sdr_console_url;
+        sdrConsoleItem.dataset.url = data.sdr_console_url || '';
         const recording = data.audio_recording || {};
         updateRecordingIndicator(recording, data.external_audio_recording || {});
         audioRecordingActive = Boolean(recording.active);
@@ -6891,6 +6977,18 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       }, 500);
       return true;
     }
+
+    document.getElementById('sdrConsoleMenuItem').addEventListener('click', (event) => {
+      const url = event.currentTarget.dataset.url;
+      if (!url || event.currentTarget.hidden) { return; }
+      const consoleWindow = window.open(url, 'bqeWispSdrConsole',
+        'popup=yes,width=1100,height=760,resizable=yes,scrollbars=yes');
+      if (consoleWindow) {
+        consoleWindow.focus();
+      } else {
+        set('message', 'The SDR Console window was blocked by the browser. Allow popups for this site and try again.');
+      }
+    });
 
     function openSstvFilesWindow() {
       if (sstvFilesWindow && !sstvFilesWindow.closed) {
@@ -8416,7 +8514,20 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       if (!fieldsElement) { return; }
       fieldsElement.innerHTML = '';
       const fieldData = data && typeof data === 'object' ? data : {};
-      let keys = Object.keys(fieldData);
+      const toggleLabel = document.createElement('label');
+      toggleLabel.htmlFor = 'radioIsSdr';
+      toggleLabel.textContent = 'Radio is an SDR';
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox'; toggle.id = 'radioIsSdr';
+      toggle.checked = fieldData.radio_is_sdr === true;
+      fieldsElement.append(toggleLabel, toggle);
+      const note = document.createElement('p');
+      note.style.gridColumn = '1 / -1';
+      note.textContent = 'SDR mode receives through BQE SDR and skips serial/CAT control for all passes and idle presets. Changes apply on the next receiver start. Choose frequencies supported by your dongle.';
+      fieldsElement.appendChild(note);
+      const hardwareKeys = ['radio_type', 'radio_port', 'radio_baud', 'radio_speed', 'radio_soundcard', 'radio_ft736r_intermediate_frequency_mhz'];
+      const hardwareRows = [], sdrRows = [];
+      let keys = Object.keys(fieldData).filter(key => !['sdr', 'radio_is_sdr'].includes(key));
       if (!keys.length) { keys = ['radio_type', 'radio_port', 'radio_speed']; }
       for (const key of keys) {
         const label = document.createElement('label');
@@ -8432,13 +8543,55 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
         fieldsElement.appendChild(label);
         fieldsElement.appendChild(input);
+        if (hardwareKeys.includes(key)) { hardwareRows.push(label, input); }
       }
+      const sdr = Object.assign({source:'usb', device:'0', sample_rate:960000, gain:'', ppm:0,
+        audio_gain:0.15, port:8772, host:'127.0.0.1', tcp_port:1234, library:'',
+        record_audio:true, record_iq:false, iq_file:'', iq_format:'cu8'}, fieldData.sdr || {});
+      const specs = [
+        ['source','SDR connection',['usb','tcp','file','demo']], ['device','USB device index or serial'],
+        ['sample_rate','IQ sample rate (samples/sec)',[240000,960000,1200000,1440000,1920000,2400000]],
+        ['gain','Tuner gain (dB; blank = automatic)'], ['ppm','Frequency correction (PPM)'],
+        ['audio_gain','Audio gain'], ['port','Local control port'], ['host','rtl_tcp host'],
+        ['tcp_port','rtl_tcp port'], ['iq_file','IQ replay file'], ['iq_format','IQ format',['cu8','cf32_le']],
+        ['library','Driver library path (optional)'], ['record_audio','Record WAV audio'], ['record_iq','Record IQ (large files)']
+      ];
+      for (const [key, title, choices] of specs) {
+        const label = document.createElement('label'); label.textContent = title;
+        label.htmlFor = 'radioSdr_' + key;
+        const input = document.createElement(choices ? 'select' : 'input');
+        input.id = label.htmlFor; input.dataset.sdrKey = key;
+        if (choices) {
+          for (const value of choices) { const option = document.createElement('option'); option.value = value; option.textContent = value; input.appendChild(option); }
+        } else { input.type = key.startsWith('record_') ? 'checkbox' : 'text'; }
+        if (input.type === 'checkbox') { input.checked = sdr[key] === true; }
+        else { input.value = sdr[key] ?? ''; }
+        fieldsElement.append(label, input); sdrRows.push([key, label, input]);
+      }
+      const refresh = () => {
+        for (const element of hardwareRows) { element.hidden = toggle.checked; }
+        const source = fieldsElement.querySelector('[data-sdr-key="source"]').value;
+        for (const [key, label, input] of sdrRows) {
+          const relevant = (['host','tcp_port'].includes(key) ? source === 'tcp' :
+            ['iq_file','iq_format'].includes(key) ? source === 'file' :
+            ['device','library'].includes(key) ? source === 'usb' : true);
+          label.hidden = input.hidden = !toggle.checked || !relevant;
+        }
+      };
+      toggle.addEventListener('change', refresh);
+      fieldsElement.querySelector('[data-sdr-key="source"]').addEventListener('change', refresh);
+      refresh();
     }
 
     function collectRadioFields() {
       const data = {};
       document.querySelectorAll('#radioFields input[data-radio-key]').forEach((input) => {
         data[input.dataset.radioKey] = input.value;
+      });
+      data.radio_is_sdr = document.getElementById('radioIsSdr').checked;
+      data.sdr = {};
+      document.querySelectorAll('#radioFields [data-sdr-key]').forEach(input => {
+        data.sdr[input.dataset.sdrKey] = input.type === 'checkbox' ? input.checked : input.value;
       });
       return data;
     }
@@ -9124,37 +9277,52 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     const diagnosticsDialog = document.getElementById('environmentDiagnosticsDialog');
     const diagnosticsSave = document.getElementById('environmentDiagnosticsSave');
     let diagnosticsReport = '';
-    document.getElementById('environmentDiagnosticsMenuItem').addEventListener('click', async () => {
+    let diagnosticsBusy = false;
+    const diagnosticsRun = document.getElementById('environmentDiagnosticsRun');
+    const diagnosticsTests = document.getElementById('environmentDiagnosticsPluginTests');
+    async function performEnvironmentDiagnostics() {
+      if (diagnosticsBusy) { return; }
+      diagnosticsBusy = true;
+      diagnosticsRun.disabled = true;
+      diagnosticsTests.disabled = true;
       const results = document.getElementById('environmentDiagnosticsResults');
       const summary = document.getElementById('environmentDiagnosticsSummary');
       diagnosticsReport = '';
       diagnosticsSave.disabled = true;
       results.textContent = '';
-      summary.textContent = 'Checking the server environment…';
-      diagnosticsDialog.showModal();
+      summary.textContent = diagnosticsTests.checked ? 'Checking environment and plugin self-tests… This may take up to two minutes.' : 'Checking the server environment…';
       try {
         const response = await fetch('/api/command', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'environment_diagnostics' })
+          body: JSON.stringify({ action: 'environment_diagnostics', include_plugin_tests: diagnosticsTests.checked })
         });
         const result = await response.json();
         if (!response.ok || !result.ok) { throw new Error(result.message || 'Diagnostics request failed.'); }
         diagnosticsReport = result.report;
-        summary.textContent = result.warnings
+        summary.textContent = result.failures ? `Completed • ${result.failures} failed suite(s), ${result.warnings || 0} warning(s)` : result.warnings
           ? `Completed • ${result.warnings} warning(s) to review`
           : 'Completed • No warnings found';
         diagnosticsReport.split('\n').forEach(line => {
           const row = document.createElement('div');
           row.textContent = line;
-          row.style.color = line.includes('[WARNING]') ? '#ffd479' : '#bdeddf';
+          row.style.color = line.includes('[FAIL]') ? '#ffaaaa' : line.includes('[WARNING]') ? '#ffd479' : '#bdeddf';
           results.appendChild(row);
         });
         diagnosticsSave.disabled = false;
       } catch (err) {
         summary.textContent = 'Unable to complete Environment Diagnostics';
         results.textContent = String(err);
+      } finally {
+        diagnosticsBusy = false;
+        diagnosticsRun.disabled = false;
+        diagnosticsTests.disabled = false;
       }
+    }
+    document.getElementById('environmentDiagnosticsMenuItem').addEventListener('click', () => {
+      if (!diagnosticsDialog.open) { diagnosticsDialog.showModal(); }
+      if (!diagnosticsBusy) { diagnosticsTests.checked = false; performEnvironmentDiagnostics(); }
     });
+    diagnosticsRun.addEventListener('click', performEnvironmentDiagnostics);
     document.getElementById('environmentDiagnosticsClose').addEventListener('click', () => diagnosticsDialog.close());
     diagnosticsSave.addEventListener('click', () => {
       const url = URL.createObjectURL(new Blob([diagnosticsReport], { type: 'text/plain;charset=utf-8' }));
@@ -9503,7 +9671,9 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/status":
-            body = json.dumps(self._status_payload_func(), default=str).encode("utf-8")
+            payload = dict(self._status_payload_func())
+            payload['sdr_console_url'] = sdr_console_url()
+            body = json.dumps(payload, default=str).encode("utf-8")
             self.send_bytes(200, "application/json; charset=utf-8", body)
             return
 

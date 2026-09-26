@@ -15,4 +15,7 @@
     priority: '3'
     auto_schedule: False
     program_to_run_during_pass:
-  
+    decode_sstv_images: false  # true uses radio_soundcard from my_rig.yaml
+    decode_telemetry: false    # true uses radio_soundcard from my_rig.yaml
+    decode_lrpt_images: false # Meteor LRPT: full SDR IQ, SatDump images after the pass
+    decode_ssdv_images: false # RS61 Geoscan images; uses radio_soundcard.

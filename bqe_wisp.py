@@ -416,7 +416,7 @@ def _configuration_diagnostics(report):
             report(f"[WARNING] Could not read {path}: {exc}")
 
 
-def run_environment_diagnostics(emit=True):
+def run_environment_diagnostics(emit=True, include_plugin_tests=False):
     """Return a report; optionally print it without redirecting global stdout."""
     lines = []
 
@@ -491,6 +491,9 @@ def run_environment_diagnostics(emit=True):
           "(default UI port; --port can override this; not a check that the recorder is running)")
     print(f"    [INFO] Hamlib rigctld TCP control port (not a UI web port): {RIGCTLD_PORT}")
     _configuration_diagnostics(print)
+    if include_plugin_tests:
+        from plugins.self_tests import run_plugin_self_tests
+        print(run_plugin_self_tests(lambda: SHUTDOWN_EVENT.is_set() or satellite_pass_is_active()))
     print("[INFO] Environment Diagnostics complete.")
     report = "\n".join(lines) + "\n"
     if emit:
@@ -1556,6 +1559,16 @@ def make_audio_recorder():
         options = parse_args(recorder_args)
     except SystemExit as exc:
         raise ValueError("The configured pass recorder arguments are invalid.") from exc
+    rig_path = os.path.join(SCRIPT_DIR, "bqe_config", "my_rig.yaml")
+    with open(rig_path, "r", encoding="utf-8") as f:
+        radio_config = yaml.safe_load(f) or {}
+    if radio_config.get("radio_is_sdr") is True:
+        from plugins.bqe_sdr.integration import audio_input
+        # Subscribe to the idle receiver rather than opening a soundcard or
+        # competing for the USB dongle. The bridge supplies 48 kHz mono PCM.
+        options.input_device = audio_input(radio_config)
+        options.device = None
+        options.sample_rate = 48000
     directory = load_web_console_settings(GENERAL_SETTINGS_FILE).recordings_location
     directory = os.path.expanduser(directory or "plugins/bqe_sound_recorder/recordings")
     if not os.path.isabs(directory):
@@ -1685,11 +1698,10 @@ def program_preset_from_web(nickname):
         print(f"[WEB PRESET] {message}")
         return result
     except Exception as e:
-        if helper_process is not None:
-            stop_idle_wait_program(
-                helper_process,
-                reason=f"after radio preset {nickname!r} failed",
-            )
+        stop_idle_wait_program(
+            helper_process,
+            reason=f"after radio preset {nickname!r} failed",
+        )
         message = f"Could not program preset {nickname!r}: {e}"
         result = {
             "ok": False,
@@ -1880,6 +1892,21 @@ def start_idle_wait_program(preset_nickname=None):
             return None
 
         program_to_run = idle_preset_cfg.get("program_to_run_while_waiting")
+        # SSTV reception has its own lifecycle and may run alongside an
+        # optional recorder/helper, including presets with no helper command.
+        from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
+        from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
+        from plugins.bqe_sdr.integration import SDR_RECEIVER
+        from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER, enabled as lrpt_enabled
+        if lrpt_enabled(idle_preset_cfg):
+            LRPT_RECEIVER.start(idle_preset_cfg, idle_preset_nickname)
+        else:
+            SDR_RECEIVER.start(idle_preset_cfg, idle_preset_nickname)
+        for receiver in (SSTV_RECEIVER, SSDV_RECEIVER):
+            try:
+                receiver.start(idle_preset_cfg, idle_preset_nickname)
+            except Exception as exc:
+                print(f'[WARNING] Could not start {receiver.label} reception: {exc}')
         if not program_to_run:
             print(
                 f"[INFO] Idle preset {idle_preset_nickname!r} was found in "
@@ -1944,6 +1971,15 @@ def stop_idle_wait_program(
     start_new_session=True.
     """
     global CURRENT_IDLE_PROCESS
+
+    from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
+    from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
+    from plugins.bqe_sdr.integration import SDR_RECEIVER
+    from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER
+    SSTV_RECEIVER.stop()
+    SSDV_RECEIVER.stop()
+    SDR_RECEIVER.stop()
+    LRPT_RECEIVER.stop()
 
     if process is None:
         process = CURRENT_IDLE_PROCESS
@@ -3005,9 +3041,10 @@ def handle_web_command(action, request_payload=None):
 
     if action == "environment_diagnostics":
         try:
-            report = run_environment_diagnostics(emit=False)
+            report = run_environment_diagnostics(emit=False,
+                include_plugin_tests=request_payload.get('include_plugin_tests') is True)
             return {"ok": True, "action": action, "report": report,
-                    "warnings": report.count("[WARNING]")}
+                    "warnings": report.count("[WARNING]"), "failures": report.count("[FAIL]")}
         except Exception as exc:
             return {"ok": False, "action": action,
                     "message": f"Environment Diagnostics failed: {exc}"}

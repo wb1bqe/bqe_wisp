@@ -10,7 +10,7 @@ monitor source, encodes continuously to MP3, and provides a local web console.
 - Provides an optional web console at <http://127.0.0.1:8765> without opening
   a browser tab automatically. Use `--open-browser` to open it on launch;
   the existing `--no-browser` option remains supported.
-- Captures playback audio, not the microphone.
+- Captures playback audio by default, or a microphone/radio input with `--input-device`.
 - Shows recording state, elapsed time, selected output device, filename, and
   current file size.
 - Saves recordings in the `recordings` subfolder with names such as
@@ -53,9 +53,17 @@ the indicator does not assume that a scheduled pass is necessarily recording.
 - Windows 10/11, or Linux with PulseAudio/PipeWire PulseAudio compatibility.
 - A playback device visible to the operating system.
 
-The Python dependencies are `SoundCard`, `numpy`, and `lameenc`. The MP3 encoder
+The Python dependencies are `SoundCard`, `numpy`, `lameenc`, and (on Windows)
+`sounddevice`. The MP3 encoder
 is included in the `lameenc` wheel, so a separate FFmpeg installation is not
 needed.
+
+Windows direct input uses callback-based WASAPI capture in raw shared mode.
+This bypasses Windows noise suppression that can erase radio static and digital
+signals, while allowing the decoders to capture the same device simultaneously.
+The recorder console shows the input level in dBFS and flags a missing signal.
+After updating an existing installation, install `requirements.txt` in the
+Python environment running BQE and restart BQE to load the capture changes.
 
 ## Windows quick start
 
@@ -132,3 +140,11 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 python pc_audio_recorder.py
 ```
+# BQE Audio menu with an SDR
+
+When `radio_is_sdr: true` is set in `bqe_config/my_rig.yaml`, **Audio → Record
+audio** subscribes to the running BQE SDR receiver at its configured port using
+48 kHz mono audio. It does not require USB Audio Codec or open the dongle again.
+Start an SDR idle preset first. The menu recording retains its configured MP3
+bitrate and recordings folder, and stops automatically when a pass starts.
+Conventional radio stations continue using the configured pass recorder input.

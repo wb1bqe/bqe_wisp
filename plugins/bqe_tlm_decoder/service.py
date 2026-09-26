@@ -9,14 +9,16 @@ import uuid
 
 import numpy as np
 import soundfile as sf
+import soundcard as sc  # Import on startup before worker threads initialize COM.
 
 from .dsp import AudioDecoder
 from .protocols import kiss_encode
+from plugins.audio_devices import audio_com, input_device, input_recorder
 import json
 
 
+@audio_com()
 def devices():
-    import soundcard as sc
     return [dict(id=d.id, name=d.name, loopback=d.isloopback)
             for d in sc.all_microphones(include_loopback=True)]
 
@@ -41,7 +43,7 @@ class Session:
             self.stop_event.clear()
             self.packets.clear()
             self.status = dict(state='starting', packets=0, error=None,
-                               source=options.get('source_name', Path(file).name) if file else 'Live audio', audio_seconds=0)
+                               source=options.get('source_name') or (Path(file).name if file else 'Live audio'), audio_seconds=0)
             self.thread = threading.Thread(target=self._run, args=(dict(options), file, cleanup), daemon=True)
             self.thread.start()
 
@@ -61,7 +63,7 @@ class Session:
             with log.open('w', encoding='utf-8') as records, kiss.open('wb') as binary:
                 def emit(packet):
                     packet.update(decoded_at=datetime.now(timezone.utc).isoformat(),
-                                  input_source=options.get('source_name', Path(file).name) if file else 'live')
+                                  input_source=options.get('source_name') or (Path(file).name if file else 'live'))
                     records.write(json.dumps(packet) + '\n')
                     records.flush()
                     binary.write(kiss_encode(bytes.fromhex(packet['frame_hex'])))
@@ -99,25 +101,27 @@ class Session:
                     with sf.SoundFile(file) as audio:
                         consume(audio.blocks(blocksize=4096, dtype='float64', always_2d=True), audio.samplerate, len(audio))
                 else:
-                    import soundcard as sc
-                    device = options.get('device')
-                    source = sc.get_microphone(device, include_loopback=True) if device else sc.default_microphone()
-                    if source is None:
-                        raise ValueError('No audio input device is available')
                     rate = int(options.get('sample_rate', 48000))
                     chunks = queue.Queue(maxsize=64)
                     failures = []
 
                     def record():
                         try:
-                            # Capture all channels: WASAPI mono capture can return corrupt data.
-                            with source.recorder(samplerate=rate) as recorder:
-                                while not self.stop_event.is_set():
-                                    data = recorder.record(numframes=2048)
-                                    try:
-                                        chunks.put_nowait(data)
-                                    except queue.Full:
-                                        raise RuntimeError('Decoder cannot keep up with live audio; select fewer baud rates')
+                            with audio_com():
+                                device = options.get('device')
+                                source = input_device(sc, device)
+                                with self.lock:
+                                    self.status['device'] = source.name if source is not None else device
+                                if source is None:
+                                    raise ValueError('No audio input device is available')
+                                # Capture all channels: WASAPI mono capture can return corrupt data.
+                                with input_recorder(source, samplerate=rate) as recorder:
+                                    while not self.stop_event.is_set():
+                                        data = recorder.record(numframes=2048)
+                                        try:
+                                            chunks.put_nowait(data)
+                                        except queue.Full:
+                                            raise RuntimeError('Decoder cannot keep up with live audio; select fewer baud rates')
                         except Exception as exc:
                             failures.append(exc)
 
@@ -140,7 +144,7 @@ class Session:
                 self.status['state'] = 'stopped' if self.stop_event.is_set() else 'completed'
         except Exception as exc:
             with self.lock:
-                self.status.update(state='error', error=str(exc))
+                self.status.update(state='error', error=str(exc) or type(exc).__name__)
         finally:
             self.stop_event.set()
             if capture:

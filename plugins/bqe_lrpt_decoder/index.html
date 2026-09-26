@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BQE LRPT · Weather images</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#09151f;color:#e7f0f5}body{max-width:1120px;margin:32px auto;padding:0 22px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:32px;margin-bottom:6px}p{color:#aac0cf;line-height:1.5}small{color:#aac0cf}section,article{background:#122532;border:1px solid #294554;border-radius:12px;padding:22px;margin:20px 0}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}label{display:block;font-size:14px;color:#b6cbd8}input,select,button{box-sizing:border-box;font:inherit;border-radius:6px;border:1px solid #426273;padding:10px;color:inherit;background:#0a1923;width:100%;margin-top:6px}button{cursor:pointer;background:#167e87;font-weight:600;width:auto;margin-right:8px}button:disabled{opacity:.45;cursor:default}button.secondary{background:#203d4e}.tag{padding:8px 13px;border-radius:20px;background:#203d4e}#message{white-space:pre-wrap;color:#ffcf87}.stats{font-size:22px;margin:16px 0}.images{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.images img{width:100%;background:#09151f}a{color:#65d4d0}details{margin:18px 0}summary{cursor:pointer;color:#65d4d0}.jobhead{display:flex;justify-content:space-between;gap:15px}.error{color:#ffb29b}.help{font-size:14px}code{overflow-wrap:anywhere}@media(max-width:700px){.grid{grid-template-columns:1fr}header,.jobhead{display:block}}
+</style>
+<header><div><small>BQE WISP / WEATHER RECEPTION</small><h1>Meteor LRPT</h1><p>Full-bandwidth IQ in. Satellite images out.</p></div><span class="tag" id="state">Idle</span></header>
+<section><h2>Receive a pass</h2><p>Capture the digital downlink, then automatically decode it with SatDump. Images appear below after processing. No speaker audio or virtual soundcard is used. Close this standalone server before a scheduled LRPT pass so BQE can manage its receiver.</p>
+<form id="capture"><div class="grid">
+<label>Satellite<select id="satellite"><option>M2-4</option><option>M2-3</option></select></label>
+<label>Downlink frequency (MHz)<input id="frequency" type="number" min="136" max="138" step="0.000001" value="137.1" required></label>
+<label>LRPT symbol rate<select id="symbol_rate"><option value="72000">72 ksym/s</option><option value="80000">80 ksym/s</option></select></label>
+<label>IQ source<select id="source"><option value="usb">RTL-SDR USB</option><option value="tcp">rtl_tcp network</option></select></label>
+<label>USB device index or serial<input id="device" value="0"></label>
+<label>Capture limit (seconds)<input id="duration" type="number" min="1" max="3600" value="1200" required></label>
+</div><details><summary>Receiver and decoder settings</summary><div class="grid">
+<label>IQ samples per second<select id="sample_rate"><option>240000</option><option>960000</option><option>1200000</option><option>1440000</option><option>1920000</option><option>2400000</option></select></label>
+<label>Tuner gain (dB; blank = auto)<input id="gain" type="number" min="-10" max="60" step="0.1"></label>
+<label>Frequency correction (PPM)<input id="ppm" type="number" value="0"></label>
+<label>rtl_tcp host<input id="host" value="127.0.0.1"></label>
+<label>rtl_tcp port<input id="tcp_port" type="number" value="1234"></label>
+<label>RTL-SDR driver library<input id="library" placeholder="Automatic discovery"></label>
+<label>SatDump executable<input id="satdump" placeholder="Bundled engine or system PATH"></label>
+<label>SatDump CLI generation<select id="cli_version"><option value="1">1.x (bundled 1.2.2)</option><option value="2">2.x</option></select></label>
+</div></details><p class="help">Frequency and rate can change. Check current satellite reports before a pass. At 240 kS/s, a 20-minute capture uses about 576 MB; IQ is retained for replay.</p>
+<button id="start" type="submit">Start IQ capture</button><button id="stop" type="button" class="secondary" disabled>Stop & decode</button><button id="engine" type="button" class="secondary">Check decoder</button></form>
+<div class="stats" id="stats">Ready to receive</div><div id="message" role="status"></div></section>
+<section><h2>Replay a recording</h2><p>Select a local SigMF data or metadata path. Use the matching satellite, frequency and rate above. IQ must be centered on the chosen downlink.</p><label>SigMF file path<input id="iq_file" placeholder="C:\path\capture.sigmf-meta or /path/capture.sigmf-meta"></label><button id="replay" class="secondary">Decode saved IQ</button></section>
+<h2>Pass recordings & images</h2><p>“No images” means no valid picture was recovered—not a successful reception. Original IQ and decoder logs remain available for diagnosis.</p><div id="jobs"><section>No recordings yet.</section></div>
+<script>
+const ids=['satellite','frequency','symbol_rate','source','device','duration','sample_rate','gain','ppm','host','tcp_port','library','satdump','cli_version'];
+const el=id=>document.getElementById(id);let lastJobs='';
+function values(){const v={};ids.forEach(id=>v[id]=el(id).value);v.frequency=Number(v.frequency)*1e6;v.gain=v.gain===''?null:Number(v.gain);return v;}
+async function api(path,data){const r=await fetch(path,data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{});const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;}
+function message(error){el('message').textContent=error.message||error;}
+function fileLink(job,path,label){const a=document.createElement('a');a.href='/files/'+[job.id,...path.split('/')].map(encodeURIComponent).join('/');a.textContent=label;a.target='_blank';a.rel='noopener';return a;}
+function renderJobs(jobs){const key=JSON.stringify(jobs);if(key===lastJobs)return;lastJobs=key;el('jobs').replaceChildren();if(!jobs.length){el('jobs').textContent='No recordings yet.';return;}for(const job of jobs){const card=document.createElement('article');const heading=document.createElement('div');heading.className='jobhead';const title=document.createElement('strong');title.textContent=(job.options?.satellite||'Meteor')+' · '+job.id;const state=document.createElement('span');state.className='tag';state.textContent=job.state;heading.append(title,state);card.append(heading);const p=document.createElement('p');p.textContent=job.error||job.message||'IQ capture and decoding job';if(job.error)p.className='error';card.append(p);const path=document.createElement('p');path.textContent='IQ: '+(job.iq_file||'Capturing…');card.append(path);card.append(fileLink(job,'job.json','Job details'),document.createTextNode(' · '),fileLink(job,'satdump.log','Decoder log'));const images=document.createElement('div');images.className='images';for(const name of job.images||[]){const a=fileLink(job,name,'');const img=document.createElement('img');img.src=a.href;img.alt=job.options.satellite+' — '+name;img.loading='lazy';a.append(img);images.append(a);}card.append(images);el('jobs').append(card);}}
+async function refresh(){try{const s=await api('/status');el('state').textContent=s.state;const active=['starting','capturing'].includes(s.state);el('start').disabled=active;el('stop').disabled=!active;el('stats').textContent=s.samples?`${Number(s.seconds).toFixed(1)} seconds · ${Number(s.samples).toLocaleString()} IQ samples · ${(Number(s.bytes||0)/1e6).toFixed(1)} MB`:'Ready to receive';if(s.error)message(s.error);renderJobs(s.jobs);}catch(e){message('Receiver connection unavailable: '+e.message);}}
+el('capture').addEventListener('submit',async e=>{e.preventDefault();try{await api('/start',values());message('Capturing IQ. Images will be decoded when capture ends.');await refresh();}catch(e){message(e);}});
+el('stop').onclick=async()=>{try{await api('/stop',{});message('Stopping capture and queuing image decoding…');}catch(e){message(e);}};
+el('engine').onclick=async()=>{try{const e=await api('/engine');message('SatDump found: '+e.path);}catch(e){message(e);}};
+el('replay').onclick=async()=>{try{await api('/replay',{...values(),iq_file:el('iq_file').value});message('Replay queued. Watch the job below.');await refresh();}catch(e){message(e);}};
+(async()=>{try{const d=await api('/defaults');for(const id of ids)if(d[id]!=null)el(id).value=id==='frequency'?d[id]/1e6:d[id];await refresh();}catch(e){message(e);}setInterval(refresh,1500);})();
+</script></html>

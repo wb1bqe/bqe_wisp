@@ -193,6 +193,10 @@ def preset_mode_setting(preset_cfg, mode, setting, normalize, defaults):
 
 
 def program_preset(preset_cfg, radio_cfg):
+    from plugins.bqe_sdr.integration import effective_config
+    preset_cfg = effective_config(preset_cfg, radio_cfg)
+    if preset_cfg.get('receive_sdr') is True and preset_cfg.get('sdr_only') is True:
+        return 'SDR-only preset selected; the BQE scheduler starts and tunes the SDR receiver.'
     radio_type, radio_port, radio_baud = get_radio_settings(radio_cfg)
 
     frequency_hz = int(preset_cfg["frequency_hz"])
