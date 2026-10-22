@@ -4,6 +4,8 @@
 # downlink frequencies etc.)
 
 satellites:
+    # sdr_required: true skips an entry when my_rig.yaml has radio_is_sdr: false.
+    # Set this for telemetry-decoder and LRPT entries.
     # Optional per-entry SSTV receiver (automatically opens a live image page):
     # decode_sstv_images: true  # uses radio_soundcard from my_rig.yaml
     # decode_telemetry: true    # uses radio_soundcard from my_rig.yaml
@@ -46,13 +48,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/io-86
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "wizard-meteo"
     satellite_type: "SSTV"
@@ -171,15 +168,12 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/iss
+    record_audio: true
+    program_to_run_during_pass: ''
     
   - nickname: "iss-aprs"  # Do not use with FT-736r due to same band uplink/downlink
+    decode_aprs: true
+    aprs_bauds: [1200]
     satellite_type: "APRS"
     satellite_name: "ISS"
     catalog_number: '25544'
@@ -276,13 +270,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/so-50
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "ao-91"
     satellite_type: "FM Voice"
@@ -299,13 +288,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/ao-91
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "ao-07-beacon"
     satellite_type: "Linear"
@@ -406,13 +390,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/lasarsat
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "MARMOTSAT-BEACON"  # Downlink not available on FT-991a
     satellite_type: "BEACON"
@@ -429,13 +408,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/marmotsat
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "MARINA-BEACON"  # Downlink not available on FT-991a
     satellite_type: "BEACON"
@@ -452,13 +426,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/marina
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "TISAT1-BEACON"
     satellite_type: "BEACON"
@@ -475,13 +444,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/tisat1
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "CUTE-1-BEACON"
     satellite_type: "BEACON"
@@ -498,13 +462,8 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/cute-1
+    record_audio: true
+    program_to_run_during_pass: ''
 
   - nickname: "fo-29-transponder"
     satellite_type: "LINEAR"
@@ -540,10 +499,5 @@ satellites:
     enable_tuning: True
     priority: '3'
     auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/fo-29
+    record_audio: true
+    program_to_run_during_pass: ''

@@ -65,8 +65,8 @@ class Demodulator:
             self.previous = x[-1]
         elif self.s.mode == 'AM':
             audio = np.abs(x)
-        elif self.s.mode == 'CW':
-            step = 2 * np.pi * 700 / AUDIO_RATE
+        elif self.s.mode in ('CW', 'BPSK'):
+            step = 2 * np.pi * (12000 if self.s.mode == 'BPSK' else 700) / AUDIO_RATE
             audio = (x * np.exp(1j * (self.beat_phase + step*np.arange(len(x))))).real
             self.beat_phase = (self.beat_phase + step * len(x)) % (2*np.pi)
         else:

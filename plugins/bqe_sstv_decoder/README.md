@@ -85,14 +85,25 @@ program directory, exactly as in the gallery. The current configuration points
 to `c:/ham/mmsstv/history`. The folder is created when decoding starts if needed;
 the plugin needs write access to it. Existing images are never overwritten.
 
-Each received image gets a unique UTC timestamp/mode `.jpg` filename and a JSON
-sidecar with source, mode, dimensions, and completion status. JPEGs become visible
+Each received image gets a unique UTC timestamp/mode `.png` filename and a JSON
+sidecar with source, mode, dimensions, and completion status. A compressed
+`.confidence.npz` sidecar preserves per-pixel signal confidence, bound to the
+image pixels by a SHA-256 digest. PNGs become visible
 only after writing finishes. Open or refresh **Files → SSTV Gallery** in BQE to
 see them; the decoder also shows its latest 100 saved images and a gallery link.
 The gallery link requires BQE's web console to be running. Both the decoder and
-gallery retain all saved JPEGs on disk.
+gallery retain all saved images on disk. The gallery also displays existing
+JPG, JPEG and BMP files. No existing images or recordings are converted or replaced.
 
 ## Supported modes
+
+Live and file audio are automatically low-pass filtered at 2.7 kHz before
+both header recognition and image decoding. This retains the SSTV tones while
+reducing high-frequency FM/SDR noise that can prevent automatic detection.
+Filter state is preserved across audio blocks; recordings and the input signal
+monitor remain unchanged. Filtering cannot restore signal lost during fades.
+Existing installations should update the plugin requirements and restart the
+decoder to load this change (SciPy is now required).
 
 - Robot 36 and 72
 - Martin 1 and 2
@@ -111,6 +122,15 @@ reaching end of file, or receiving a new header saves a recognized unfinished
 image with `-partial` in its filename. Missing rows may be black. “Complete” means
 the decoder received all rows, not that the picture is free of noise or errors.
 No detected image produces an explicit status message instead of a blank JPEG.
+
+Automatic receptions write flushed, UTC-timestamped diagnostic events into the
+pass log: reception startup, each detected header (mode, detector and elapsed
+audio time), and a final summary on completion, stop or error. The summary
+includes source/input, sample rate/channel, processed audio seconds, header
+count, image count, last mode, output folder and any error or warning. Ordinary
+audio blocks and waveform data are not logged. File decoding emits the same
+events to its console. A forcibly killed process cannot write a final summary;
+its last flushed event remains available.
 
 Keep squelch open, disable noise suppression/audio enhancements, and avoid
 clipping. WAV preserves more signal detail than MP3. Channel numbers begin at
@@ -145,6 +165,63 @@ transmissions in a file or a live session are handled automatically. Metadata's
 `audio_seconds` is the approximate beginning of the detection buffer, within
 about three seconds of the header; `decoded_at` is the processing time.
 
+After a valid VIS header, reception stays active for that mode's actual image
+duration plus a short timing allowance. Fades and missing sync pulses do not
+restart the image or shorten the listening period. At the deadline (or earlier
+if the recording/pass ends), the decoder saves the best available result.
+Damaged images receive the `-partial` filename suffix. A sample-clock fallback
+keeps later rows at their expected positions when the signal returns, leaving
+squelched/missing rows black. It supports all 18 supported modes. Spectral VIS
+detection checks leader, framing and even parity before accepting a noisy header.
+Recovery metadata records the expected duration and missing sync/row counts.
+These indicate reception damage, not a guarantee that every pixel is correct;
+signal that is absent or buried in noise cannot be reconstructed.
+
+Weak-signal recovery blends phase-based pixels with short-window spectral tone
+estimates when the tone confidence drops. Sync corrections are fitted against
+the header's line clock instead of accumulating through a fade. This reduces
+noise-induced timing drift; missing signal still cannot supply picture detail.
+Save paths and capture errors are also printed into managed pass logs.
+
+### Optional repeated-image combining
+
+Select **Combine matching repeated images** in the controls, or pass
+`--combine-fragments` on the command line. BQE enables it automatically for
+managed SSTV reception (satellite passes and idle presets). Standalone launches
+leave it off unless requested. Each original
+is saved as usual. If another reception matches, an additional `-composite`
+image combines higher-confidence pixels and averages similarly reliable pixels.
+Its JSON metadata lists source positions in seconds within that decoding session.
+Composites remain marked partial; combining is not proof of a flawless image.
+
+Matching requires the same mode, header-aligned coordinates, and substantial
+reliable, textured overlap across the picture interior. Shared banners and
+callsigns alone are insufficient. Disjoint fragments, lost VIS headers, large
+alignment errors, or an ambiguous match are left separate. This is deliberately
+conservative: it may decline a real repeat rather than blend different pictures.
+The matcher retains at most 12 recent originals and resets with each new source.
+No generative filling or invented image detail is used.
+
+### Gallery enhancement across passes
+
+Open **Files → SSTV Gallery**, check 2–24 images, and click
+**Aggressive Multi-image Enhancement**. A separate worker compares the selected
+pictures, aligns modest horizontal/vertical offsets, and combines matching
+groups. It uses saved signal confidence for new PNGs and explicitly labeled
+visual quality estimates for older JPG/BMP/PNG images. This does not re-decode
+audio or invent missing detail. Retain the original recordings for later decoding.
+
+Results are new `sstv-enhanced-*.png` files in the same gallery, with confidence
+sidecars and JSON listing source filenames and alignment offsets. The page shows
+progress, result links, and a cancel button. Refresh to add results to the thumbnail
+grid. Cancelling preserves originals and any results already written. Work
+continues if the browser tab closes. The Windows worker runs below normal priority.
+
+Matching checks the picture interior rather than shared headings or callsigns.
+Unmatched or unreadable images are reported and left intact. Completely disjoint
+fragments or severely distorted pictures may not provide enough evidence to merge.
+The selected images are never discarded because their reception was imperfect.
+
 For a BQE pass program, use the full path to `.venv/Scripts/python.exe`, followed
 by the full path to `bqe_sstv_decoder.py`, `--device "Your device" --no-web`.
 The plugin honors `BQE_PASS_STOP_FILE` and `--stop-file PATH` to stop gracefully
@@ -163,9 +240,11 @@ plugins\bqe_sstv_decoder\.venv\Scripts\python.exe -m unittest discover -s plugin
 
 Tests exercise every supported mode, independently generated PySSTV signals for
 Robot/Martin/Scottie/PD, MP3 and stereo WAV input, consecutive transmissions,
-arbitrary block boundaries, partial images, silence/noise, saved JPEG colors and
+arbitrary block boundaries, partial images, silence/noise, saved PNG pixels, confidence sidecars, and
 metadata, configuration, HTTP controls, and mocked capture lifecycle. Physical
 radio reception and sound-driver behavior require an on-air check.
+Every supported mode is also checked with strong out-of-band interference.
+Filter continuity and recognition are checked at 8, 44.1, 48, and 192 kHz.
 
 ## Decoder dependency
 
@@ -173,3 +252,9 @@ Uses the MIT-licensed [sstv Python package](https://github.com/unexcellent/sstv-
 and its [Rust decoding engine](https://github.com/unexcellent/sstv), pinned to
 Python package version 0.1.0. These dependencies are installed, not vendored.
 PySSTV is an independent encoder used only by tests. See `THIRD_PARTY.md`.
+
+The optional real-recording regression can be run by setting
+`SSTV_RECORDING_REGRESSION` to the 2026-10-04 20:55:01 UTC ISS WAV, then running
+`python -m unittest plugins.bqe_sstv_decoder.tests.test_fading_composite -v`.
+It checks three Robot 36 receptions (including the very weak third transmission)
+and verifies that the distinct pictures are not combined.

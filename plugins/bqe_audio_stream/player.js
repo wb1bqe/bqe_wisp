@@ -1,6 +1,11 @@
 /* Each page owns its fetch connection and playback context. */
 (() => {
-  const button = document.getElementById('streamAudioMenuItem');
+  const choices = [
+    {button: document.getElementById('streamAudioMenuItem'), label: 'Stream Audio',
+      active: 'Stop Streaming', endpoint: '/audio-stream/pcm', source: 'sound-card audio'},
+    {button: document.getElementById('listenAudioMenuItem'), label: 'Listen',
+      active: 'Stop Listening', endpoint: '/audio-listen/pcm', source: 'configured radio audio'}
+  ].filter(choice => choice.button);
   let session = null;
   const message = text => {
     const node = document.getElementById('message');
@@ -9,28 +14,33 @@
   function stop() {
     const old = session;
     session = null;
-    button.textContent = 'Stream Audio';
-    button.setAttribute('aria-checked', 'false');
+    for (const choice of choices) {
+      choice.button.textContent = choice.label;
+      choice.button.setAttribute('aria-checked', 'false');
+    }
     if (old) {
       old.abort.abort();
       old.context.close().catch(() => {});
     }
   }
-  button.addEventListener('click', async () => {
-    if (session) { stop(); message('Audio streaming stopped.'); return; }
+  for (const choice of choices) choice.button.addEventListener('click', async () => {
+    const same = session && session.choice === choice;
+    stop();
+    if (same) { message('Audio playback stopped.'); return; }
+    const button = choice.button;
     let current;
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (!AudioContext) throw new Error('This browser does not support Web Audio.');
-      current = {context: new AudioContext(), abort: new AbortController()};
+      current = {context: new AudioContext(), abort: new AbortController(), choice};
       session = current;
-      button.textContent = 'Stop Streaming';
+      button.textContent = choice.active;
       button.setAttribute('aria-checked', 'true');
       // Resume immediately within the user's click (also works over LAN HTTP).
       await current.context.resume();
       if (session !== current) return;
-      message('Connecting to sound-card audio...');
-      const response = await fetch('/audio-stream/pcm', {
+      message('Connecting to ' + choice.source + '...');
+      const response = await fetch(choice.endpoint, {
         headers: {'X-BQE-Audio': '1'}, cache: 'no-store', signal: current.abort.signal
       });
       if (!response.ok) throw new Error(await response.text());
@@ -41,10 +51,10 @@
       const ctx = current.context;
       let pending = new Uint8Array(0), next = ctx.currentTime + .12;
       const blockBytes = Math.floor(rate * .04) * 2;
-      message('Streaming sound-card audio. Choose Audio / Stop Streaming to stop.');
+      message('Playing ' + choice.source + '. Choose Audio / ' + choice.active + ' to stop.');
       while (session === current) {
         const {value, done} = await reader.read();
-        if (done) throw new Error('Audio stream ended. Check the sound device and start streaming again.');
+        if (done) throw new Error('Audio ended. Check the radio source and start playback again.');
         if (session !== current) break;
         const joined = new Uint8Array(pending.length + value.length);
         joined.set(pending); joined.set(value, pending.length);
@@ -69,7 +79,7 @@
     } catch (error) {
       if (session === current) {
         stop();
-        message('Audio streaming: ' + error.message);
+        message(choice.label + ': ' + error.message);
       }
     }
   });

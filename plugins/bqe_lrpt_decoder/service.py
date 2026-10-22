@@ -8,6 +8,7 @@ import time
 import uuid
 from .config import Options
 from .engine import executable, write_json, launch_job
+from .orientation import snapshot_orbit
 from plugins.bqe_sdr.sources import source
 
 
@@ -48,7 +49,7 @@ class Session:
         folder.mkdir(parents=True)
         now = datetime.now(timezone.utc).isoformat()
         return folder, dict(id=name, options=options.as_dict(), state='capturing', error=None,
-            started=now, captured_at=now, products=str(folder/'products'),
+            started=now, captured_at=now, orbit=snapshot_orbit(options), products=str(folder/'products'),
             sample_rate=options.sample_rate, frequency=options.frequency, format='cu8', images=[])
 
     def _capture(self, options):
@@ -90,7 +91,8 @@ class Session:
             if not count:
                 raise ValueError('No IQ samples received')
             meta = {'global': {'core:datatype':'cu8', 'core:sample_rate':options.sample_rate,
-                              'core:version':'1.2.5', 'core:recorder':'BQE LRPT'},
+                              'core:version':'1.2.5', 'core:recorder':'BQE LRPT',
+                              'bqe:orbit':job['orbit']},
                     'captures':[{'core:sample_start':0, 'core:frequency':options.frequency,
                                  'core:datetime':job['started']}], 'annotations':[]}
             write_json(data.with_suffix('.sigmf-meta'), meta)
@@ -132,6 +134,9 @@ class Session:
         folder, job = self.new_job(options)
         job.update(state='queued', iq_file=str(path), sample_rate=rate, format=fmt,
                    bytes=size, samples=size//width, captured_at=captures[0].get('core:datetime'))
+        # An archived orbit takes precedence over today's local elements.
+        if 'bqe:orbit' in meta['global']:
+            job['orbit'] = meta['global']['bqe:orbit']
         write_json(folder/'job.json', job)
         launch_job(folder/'job.json')
         return job

@@ -96,11 +96,13 @@ class LRPTTests(unittest.TestCase):
             for code, expected in [(0,'no_images'),(3,'error')]:
                 engine.write_json(path,base)
                 with patch.object(engine.subprocess,'run',return_value=Mock(returncode=code)):
-                    self.assertEqual(engine.decode_job(path)['state'],expected)
+                    result = engine.decode_job(path)
+                    self.assertEqual(result['state'],expected,result)
             (folder/'products'/'image.png').write_bytes(b'test image artifact')
             engine.write_json(path,base)
             with patch.object(engine.subprocess,'run',return_value=Mock(returncode=0)):
-                self.assertEqual(engine.decode_job(path)['state'],'completed')
+                result = engine.decode_job(path)
+                self.assertEqual(result['state'],'completed',result)
             with self.assertRaises(ValueError):
                 engine.decode_job(path) # Cannot duplicate a running/completed job.
 

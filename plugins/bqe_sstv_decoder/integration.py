@@ -9,10 +9,15 @@ ROOT = Path(__file__).resolve().parent
 
 
 class Receiver:
+    def decoder_args(self, config):
+        return ['--combine-fragments'] if self.key == 'decode_sstv_images' else []
+
     def __init__(self, key='decode_sstv_images', root=ROOT, port=8768, label='SSTV'):
         self.process = None
         self.lock = threading.RLock()
         self.key, self.root, self.port, self.label = key, Path(root), port, label
+        from plugins.runtime_status import register
+        register(self)
 
     def start(self, config, source_name, radio_config=None):
         """Resolve an enabled decoder's input from the rig or legacy SSTV key."""
@@ -46,6 +51,7 @@ class Receiver:
                        str(self.root / (self.root.name + '.py')), '--device', device.strip(),
                        '--source-name', str(source_name), '--managed', '--port', str(self.port),
                        '--fallback-port', '--open-browser']
+            command.extend(self.decoder_args(config))
             kwargs = dict(cwd=str(self.root.parents[1]), stdin=subprocess.PIPE)
             if os.name == 'nt':
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW

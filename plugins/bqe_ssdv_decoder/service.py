@@ -26,20 +26,39 @@ class Session(ImageSession):
 
     def image_metadata(self, image):
         return {key: image.info.get(key) for key in
-                ('file_id', 'packets', 'received_bytes', 'missing_bytes', 'conflicting_packets', 'end_received')}
+                ('file_id', 'packets', 'received_bytes', 'expected_bytes', 'missing_bytes', 'missing_packets', 'conflicting_packets', 'end_received')}
 
     def new_decoder(self, rate, options):
+        profile = options.get('profile', 'rs61')
+        if profile not in ('rs61', 'hades-sa', 'umka-1', 'geoscan'):
+            raise ValueError('Unsupported SSDV profile')
+        decoder_class = AudioDecoder
+        if profile == 'hades-sa':
+            from .hades import AudioDecoder as decoder_class
+            self.no_image_message = 'No displayable SO-127 image yet. Valid SSDV packets are retained in the KISS log.'
+        elif profile == 'umka-1':
+            from .umka import AudioDecoder as decoder_class
+            self.no_image_message = 'No displayable UMKA-1 JPEG yet. USP packets (including non-JPEG files) are retained in the KISS log.'
+        elif profile == 'geoscan':
+            from .geoscan import AudioDecoder as decoder_class
+            self.no_image_message = 'No displayable Geoscan image yet. Valid packets are retained in the KISS log.'
+        else:
+            self.no_image_message = type(self).no_image_message
         self.output.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
         log = self.output / ('ssdv-packets-' + stamp + '-' + uuid.uuid4().hex[:8] + '.kiss')
         log.touch(exist_ok=False)
-        self.update(packet_log=str(log), baud=9600, packets=0, image_packets=0)
+        labels = {'rs61': 'RS61 / Geoscan', 'geoscan': 'Geoscan v1/v2',
+                  'umka-1': 'UMKA-1 / USP', 'hades-sa': 'SO-127 / SSDV'}
+        baud = {'umka-1': '2400/4800/9600', 'hades-sa': '200/800/1600'}.get(profile, 9600)
+        self.update(packet_log=str(log), profile=profile, baud=baud, packets=0, image_packets=0,
+                    mode=labels[profile], reception=f'Waiting for {labels[profile]} image packets')
 
         def save_packet(packet):
             with log.open('ab') as stream:
                 stream.write(kiss_encode(packet))
 
-        return AudioDecoder(rate, self._save, self.update, self.preview, packet_sink=save_packet)
+        return decoder_class(rate, self._save, self.update, self.preview, packet_sink=save_packet)
 
     def _run(self, options, file, cleanup):
         if not file or Path(file).suffix.lower() not in ('.kiss', '.kss'):
@@ -47,12 +66,15 @@ class Session(ImageSession):
         try:
             decoder = self.new_decoder(48000, options)
             self.update(state='running', packet_input=True,
-                        reception='Reading previously demodulated Geoscan packets')
+                        reception='Reading previously demodulated image packets')
             with Path(file).open('rb') as stream:
                 for packet in kiss_packets(stream):
                     if self.stop_event.is_set():
                         break
-                    if len(packet) == 72:
+                    profile = options.get('profile', 'rs61')
+                    if (profile == 'umka-1' or
+                            len(packet) in ({64, 72} if profile == 'geoscan' else
+                                            {256} if profile == 'hades-sa' else {72})):
                         decoder.packet(packet, time.monotonic())
             decoder.images.finish()
             self.update(state='stopped' if self.stop_event.is_set() else 'completed',

@@ -1,0 +1,27 @@
+# Core application and all bundled plugins. Python 3.10+ (64-bit Windows).
+# Keep plugin constraints authoritative; pip resolves their shared dependencies.
+# argparse and datetime are Python standard-library modules, not pip dependencies.
+requests>=2.31,<3
+packaging>=24,<27
+PyYAML>=6,<7
+numpy>=1.24,<3
+-r plugins/bqe_pass_voice/requirements.txt
+Pillow>=10.0,<13
+skyfield>=1.49,<2
+-r plugins/bqe_hf_image_decoder/requirements.txt
+-r plugins/bqe_lasarsat_decoder/requirements.txt
+-r plugins/bqe_lrpt_decoder/requirements.txt
+-r plugins/bqe_marmotsat_decoder/requirements.txt
+-r plugins/bqe_monitor_decoder/requirements.txt
+-r plugins/bqe_otp2_decoder/requirements.txt
+-r plugins/bqe_rs61_decoder/requirements.txt
+-r plugins/bqe_sdr/requirements.txt
+-r plugins/bqe_sound_recorder/requirements.txt
+-r plugins/bqe_ssdv_decoder/requirements.txt
+-r plugins/bqe_sstv_decoder/requirements.txt
+-r plugins/bqe_aprs_decoder/requirements.txt
+-r plugins/bqe_tlm_decoder/requirements.txt
+-r plugins/bqe_so127_decoder/requirements.txt
+-r plugins/bqe_speech_decoder/requirements.txt
+
+-r plugins/bqe_ao123_decoder/requirements.txt

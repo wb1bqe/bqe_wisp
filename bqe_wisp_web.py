@@ -18,6 +18,13 @@ from urllib.parse import parse_qs, quote, urlparse
 import yaml
 
 from plugins.bqe_audio_stream import AUDIO_STREAM
+from plugins.bqe_audio_stream.listen import RADIO_LISTEN
+from plugins.telemetry_view import ARCHIVE as TELEMETRY_ARCHIVE, catalog as telemetry_catalog, has_recent_telemetry
+from plugins.aprs_spots import ARCHIVE as APRS_SPOTS_ARCHIVE
+from plugins import weather_gallery
+from plugins.sstv_enhancement import ENHANCEMENT_JOB
+from plugins.recording_decoders import RECORDING_DECODERS, recording_source
+from plugins.bqe_speech_decoder.storage import transcript_path, read_transcript, transcript_text
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -374,6 +381,7 @@ def _radio_editable_data() -> dict[str, Any]:
     """Return template fields with existing my_rig.yaml values overlaid when present."""
     #template_data = _read_rig_template_yaml(RIG_TEMPLATE_PATH)
     rig_yaml_data = _read_rig_config_yaml(RIG_CONFIG_PATH)
+    rig_yaml_data.setdefault('radio_ft736r_intermediate_frequency_mhz', 50.1)
 
     #merged_data = dict(template_data)
     #for key, value in existing_data.items():
@@ -1215,7 +1223,7 @@ def resolve_sstv_images_directory(configured_location: str) -> Optional[Path]:
 
 
 def list_sstv_jpg_files(configured_location: str) -> tuple[Optional[Path], list[Path], str]:
-    """Return safe, top-level .jpg files from the configured SSTV folder."""
+    """Return safe gallery images (legacy function name retained for callers)."""
     directory = resolve_sstv_images_directory(configured_location)
     if directory is None:
         return None, [], "sstv_gallery_location is not set in general_settings.yaml."
@@ -1227,7 +1235,7 @@ def list_sstv_jpg_files(configured_location: str) -> tuple[Optional[Path], list[
     try:
         jpg_files = []
         for entry in directory.iterdir():
-            if entry.suffix.casefold() != ".jpg" or not entry.is_file():
+            if entry.suffix.casefold() not in {'.jpg', '.jpeg', '.png', '.bmp'} or not entry.is_file():
                 continue
             # Do not expose a symlink that resolves outside the configured folder.
             if entry.resolve().parent != directory:
@@ -1236,19 +1244,19 @@ def list_sstv_jpg_files(configured_location: str) -> tuple[Optional[Path], list[
         # Default gallery order is by file modification timestamp, newest first.
         # Filename is used as a stable tie-breaker when timestamps are identical.
         jpg_files.sort(key=lambda path: (-path.stat().st_mtime, path.name.casefold()))
-        message = "" if jpg_files else f"No JPG files were found in {directory}."
+        message = "" if jpg_files else f"No supported image files were found in {directory}."
         return directory, jpg_files, message
     except OSError as exc:
         return directory, [], f"Could not read the configured SSTV image folder: {exc}"
 
 
 def resolve_sstv_image_file(configured_location: str, requested_name: str) -> Optional[Path]:
-    """Resolve one requested JPG without allowing access outside the configured folder."""
+    """Resolve one gallery image without allowing access outside the folder."""
     directory = resolve_sstv_images_directory(configured_location)
     name = str(requested_name or "")
     if directory is None or not name or Path(name).name != name:
         return None
-    if Path(name).suffix.casefold() != ".jpg":
+    if Path(name).suffix.casefold() not in {'.jpg', '.jpeg', '.png', '.bmp'}:
         return None
 
     try:
@@ -1260,6 +1268,36 @@ def resolve_sstv_image_file(configured_location: str, requested_name: str) -> Op
         return None
 
 
+def delete_sstv_images(configured_location: str, names) -> dict:
+    """Delete explicitly selected regular images; validate the entire selection first."""
+    if (not isinstance(names, list) or not names or
+            not all(isinstance(name, str) for name in names) or len(set(names)) != len(names)):
+        raise ValueError('Select one or more different images')
+    directory = resolve_sstv_images_directory(configured_location)
+    if directory is None:
+        raise ValueError('SSTV gallery is not configured')
+    with ENHANCEMENT_JOB.lock:
+        if ENHANCEMENT_JOB.process and ENHANCEMENT_JOB.process.poll() is None:
+            raise ValueError('Wait for enhancement to finish before deleting images')
+        paths = []
+        for name in names:
+            path = resolve_sstv_image_file(configured_location, name)
+            candidate = directory / name
+            if path is None or candidate.is_symlink() or candidate.absolute() != path:
+                raise ValueError('Selected image is unavailable or outside the gallery: ' + name)
+            paths.append((name, candidate))
+        deleted, errors = [], []
+        for name, path in paths:
+            try:
+                path.unlink()
+                deleted.append(name)
+            except OSError as exc:
+                errors.append(dict(name=name, message=str(exc)))
+        return dict(deleted=deleted, errors=errors,
+                    message=f'Deleted {len(deleted)} image(s).' +
+                    (f' Could not delete {len(errors)} image(s).' if errors else ''))
+
+
 def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI_THEME) -> str:
     """Build the independent SSTV thumbnail-gallery page."""
     directory, jpg_files, message = list_sstv_jpg_files(configured_location)
@@ -1269,10 +1307,12 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
         image_url = "/sstv-image?name=" + quote(image_path.name, safe="")
         modified_timestamp = image_path.stat().st_mtime
         cards.append(
-            '<a class="image-card" href="{url}" '
-            'title="Open {name} full size" data-filename="{sort_name}" data-mtime="{mtime:.6f}">'
+            '<article class="image-card" data-filename="{sort_name}" data-mtime="{mtime:.6f}">'
+            '<label><input type="checkbox" class="enhance-select" data-name="{name}" '
+            'aria-label="Select {name}"> Select</label>'
+            '<a class="image-open" href="{url}" title="Open {name} full size">'
             '<img src="{url}" alt="{name}" loading="lazy">'
-            '<span>{name}</span></a>'.format(
+            '<span>{name}</span></a></article>'.format(
                 url=image_url,
                 name=safe_name,
                 sort_name=html.escape(image_path.name.casefold(), quote=True),
@@ -1310,6 +1350,7 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
       align-items: center;
       justify-content: space-between;
       gap: 18px;
+      flex-wrap: wrap;
       padding: 12px 16px;
       background: linear-gradient(180deg, #eeeeee, #bdbdbd);
       border-bottom: 2px ridge #d2d2d2;
@@ -1319,10 +1360,16 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
     .source { margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
     .gallery-controls {
       display: flex;
-      flex: 0 0 auto;
+      flex: 1 1 440px;
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: 8px;
+    }
+    header > div:first-child { flex: 1 1 240px; min-width: 0; }
+    .gallery-controls button { max-width: 100%; white-space: normal; }
+    @media (max-width: 560px) {
+      header { position: static; }
+      .gallery-controls { justify-content: flex-start; }
     }
     button {
       flex: 0 0 auto;
@@ -1355,6 +1402,13 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
       text-decoration: none;
     }
     .image-card:hover, .image-card:focus { background: #e2e2e2; outline: 3px solid #05058a; }
+    .image-open { display: flex; flex-direction: column; color: inherit; text-decoration: none; }
+    .image-card label { padding: 5px; cursor: pointer; }
+    .enhance-select { width: 18px; height: 18px; }
+    .image-card:has(input:checked) { outline: 3px solid #2787cf; }
+    .enhancement-panel { padding: 12px 20px; }
+    .enhancement-panel a { color: inherit; }
+    button:disabled { opacity: .5; cursor: default; }
     .image-card img {
       width: 100%;
       height: 180px;
@@ -1456,9 +1510,19 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
     <div class="gallery-controls">
       <button type="button" id="sortFilenameButton" onclick="sortGallery('filename')">Sort by Filename</button>
       <button type="button" id="sortTimestampButton" class="sort-active" onclick="sortGallery('timestamp')">Sort by Timestamp</button>
+      <button type="button" id="enhanceSelectAll">Select all</button>
+      <button type="button" id="enhanceButton" disabled>Aggressive Multi-image Enhancement</button>
+      <button type="button" id="deleteImagesButton" disabled>Delete selected images</button>
+      <button type="button" id="enhanceCancel" hidden>Cancel enhancement</button>
       <button type="button" onclick="window.location.reload()">Refresh</button>
     </div>
   </header>
+  <section class="enhancement-panel" aria-label="Multi-image enhancement">
+    <p>Select 2–24 images to find matching pictures and combine their better parts. Originals are preserved.
+       Older images use estimated quality; new SSTV PNGs include signal confidence.</p>
+    <div id="enhanceStatus" role="status" aria-live="polite">No images selected.</div>
+    <ul id="enhanceResults"></ul>
+  </section>
   __CONTENT__
   <dialog id="imageViewer" aria-labelledby="viewerFilename">
     <div class="viewer-toolbar">
@@ -1470,7 +1534,7 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
   <script>
     const imageViewer = document.getElementById('imageViewer');
     document.querySelector('.gallery')?.addEventListener('click', event => {
-      const card = event.target.closest('.image-card');
+      const card = event.target.closest('.image-open');
       if (!card || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
       event.preventDefault();
       const image = document.getElementById('viewerImage');
@@ -1507,6 +1571,7 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
       document.getElementById('sortTimestampButton')?.classList.toggle('sort-active', sortMode === 'timestamp');
     }
   </script>
+  <script src="/sstv-enhancement.js"></script>
 </body>
 </html>
 """.replace("__SOURCE__", source_text).replace("__CONTENT__", content).replace(
@@ -1515,7 +1580,7 @@ def build_sstv_gallery_html(configured_location: str, ui_theme: str = DEFAULT_UI
 
 
 def resolve_recordings_directory(configured_location: str) -> Optional[Path]:
-    """Resolve the sound recorder's MP3 folder relative to the program directory."""
+    """Resolve the sound recorder's audio folder relative to the program directory."""
     location = str(configured_location or "").strip()
     if not location:
         return None
@@ -1528,7 +1593,7 @@ def resolve_recordings_directory(configured_location: str) -> Optional[Path]:
 
 def list_recording_mp3_files(
         configured_location: str) -> tuple[Optional[Path], list[Path], str]:
-    """Return safe, top-level MP3 files from the configured recordings folder."""
+    """Return safe, top-level audio files from the configured recordings folder."""
     directory = resolve_recordings_directory(configured_location)
     if directory is None:
         return (
@@ -1544,26 +1609,26 @@ def list_recording_mp3_files(
     try:
         recordings = []
         for entry in directory.iterdir():
-            if entry.suffix.casefold() != ".mp3" or not entry.is_file():
+            if entry.suffix.casefold() not in {".mp3", ".wav"} or not entry.is_file():
                 continue
             # Do not expose a symlink that resolves outside the configured folder.
             if entry.resolve().parent != directory:
                 continue
             recordings.append(entry)
         recordings.sort(key=lambda path: (-path.stat().st_mtime, path.name.casefold()))
-        message = "" if recordings else f"No MP3 files were found in {directory}."
+        message = "" if recordings else f"No audio files were found in {directory}."
         return directory, recordings, message
     except OSError as exc:
         return directory, [], f"Could not read the configured recordings folder: {exc}"
 
 
 def resolve_recording_file(configured_location: str, requested_name: str) -> Optional[Path]:
-    """Resolve one requested MP3 without allowing access outside the recordings folder."""
+    """Resolve one requested audio without allowing access outside the recordings folder."""
     directory = resolve_recordings_directory(configured_location)
     name = str(requested_name or "")
     if directory is None or not name or Path(name).name != name:
         return None
-    if Path(name).suffix.casefold() != ".mp3":
+    if Path(name).suffix.casefold() not in {".mp3", ".wav"}:
         return None
 
     try:
@@ -1577,7 +1642,7 @@ def resolve_recording_file(configured_location: str, requested_name: str) -> Opt
 
 def build_recordings_html(
         configured_location: str, ui_theme: str = DEFAULT_UI_THEME) -> str:
-    """Build an independent MP3 recordings browser and player page."""
+    """Build an independent audio recordings browser and player page."""
     directory, recordings, message = list_recording_mp3_files(configured_location)
     rows = []
     for recording_path in recordings:
@@ -1590,16 +1655,20 @@ def build_recordings_html(
         file_url = "/recording-file?name=" + quote(recording_path.name, safe="")
         modified = datetime.fromtimestamp(stat.st_mtime).astimezone()
         rows.append(
-            '<tr data-filename="{sort_name}" data-mtime="{mtime:.6f}">'
+            '<tr data-filename="{sort_name}" data-source="{source}" data-mtime="{mtime:.6f}">'
             '<td class="recording-actions">'
             '<input type="checkbox" class="morse-checkbox" data-url="{url}" '
-            'data-name="{attribute_name}" aria-label="Select {attribute_name} for Morse decoding">'
+            'data-name="{attribute_name}" aria-label="Select {attribute_name} for decoding">'
             '<button type="button" class="play-button" data-url="{url}" '
             'data-name="{attribute_name}">Play</button></td>'
             '<td><a href="{url}" class="recording-link" data-url="{url}" '
-            'data-name="{attribute_name}">{name}</a></td>'
+            'data-name="{attribute_name}">{name}</a>'
+            '<button type="button" class="transcript-open" data-transcript-name="{attribute_name}" {transcript_hidden}>View transcript</button></td>'
             '<td>{modified}</td><td>{size}</td>'
-            '<td class="morse-result" data-morse-result>Not analyzed</td></tr>'.format(
+            '<td class="morse-result" data-morse-result>Not analyzed</td>'
+            '<td data-recording-decode-result>Not decoded</td></tr>'.format(
+                source=html.escape(recording_source(recording_path.name), quote=True),
+                transcript_hidden='' if transcript_path(recording_path).is_file() else 'hidden',
                 sort_name=html.escape(recording_path.name.casefold(), quote=True),
                 mtime=stat.st_mtime,
                 url=html.escape(file_url, quote=True),
@@ -1616,9 +1685,9 @@ def build_recordings_html(
     else:
         content = (
             '<table><thead><tr><th><label class="select-all-morse">'
-            '<input type="checkbox" id="selectAllMorse"> Morse</label></th>'
+            '<input type="checkbox" id="selectAllMorse"> Select all visible</label></th>'
             '<th>Recording</th><th>Last modified</th>'
-            '<th>Size</th><th>Morse decode</th></tr></thead><tbody id="recordingsBody">'
+            '<th>Size</th><th>Morse decode</th><th>Decoding / transcript</th></tr></thead><tbody id="recordingsBody">'
             + "".join(rows) + "</tbody></table>"
         )
 
@@ -1763,16 +1832,37 @@ def build_recordings_html(
   <header>
     <div class="header-row">
       <div><h1>Recordings</h1><div class="source">Folder: __SOURCE__</div></div>
-      <div class="controls">
-        <button type="button" id="morseDecodeButton" disabled>Decode Checked Morse</button>
-        <button type="button" id="sortFilenameButton" onclick="sortRecordings('filename')">Sort by Filename</button>
-        <button type="button" id="sortTimestampButton" class="sort-active" onclick="sortRecordings('timestamp')">Sort by Timestamp</button>
-        <button type="button" onclick="window.location.reload()">Refresh</button>
+      <div class="controls recordings-controls">
+        <div class="recordings-control-row" role="group" aria-label="Filter and sort recordings">
+          <button type="button" id="satelliteFilterButton">Filter Satellites</button>
+          <button type="button" id="sortFilenameButton" onclick="sortRecordings('filename')">Sort by Filename</button>
+          <button type="button" id="sortTimestampButton" class="sort-active" onclick="sortRecordings('timestamp')">Sort by Timestamp</button>
+          <button type="button" onclick="window.location.reload()">Refresh</button>
+        </div>
+        <fieldset class="speech-controls">
+          <legend>Speech transcription</legend>
+        <button type="button" id="speechDecodeButton" disabled>Transcribe speech</button>
+        <input type="hidden" id="speechLanguage" value="en">
+        <div class="speech-languages" role="group" aria-label="Transcription language">
+          <button type="button" data-speech-language="en" aria-pressed="true">English</button>
+          <button type="button" data-speech-language="fr" aria-pressed="false">French</button>
+          <button type="button" data-speech-language="es" aria-pressed="false">Spanish</button>
+          <button type="button" data-speech-language="pt-BR" aria-pressed="false">Portuguese (Brazil)</button>
+          <button type="button" data-speech-language="pt-PT" aria-pressed="false">Portuguese (Portugal)</button>
+          <button type="button" data-speech-language="zh" aria-pressed="false">Mandarin Chinese</button>
+          <button type="button" data-speech-language="ja" aria-pressed="false">Japanese</button>
+        </div>
+        </fieldset>
+        <div class="recordings-control-row" role="group" aria-label="Decode checked recordings">
+          <button type="button" id="morseDecodeButton" disabled>Decode Checked Morse</button>
+          <button type="button" id="sstvDecodeButton" disabled title="Decode SSTV images from the checked recordings and save them in the SSTV Gallery.">Decode SSTV</button>
+          <button type="button" id="aprsDecodeButton" disabled>Decode APRS</button>
+        </div>
       </div>
     </div>
     <div class="player-panel">
       <div id="nowPlaying">Choose a recording below.</div>
-      <audio id="recordingPlayer" controls preload="metadata">Your browser does not support MP3 playback.</audio>
+      <audio id="recordingPlayer" controls preload="metadata">Your browser does not support audio playback.</audio>
       <div class="playback-options">
         <label class="noise-reduction-toggle" for="noiseReductionCheckbox"
                title="Limits playback to the speech and CW audio range and adaptively suppresses noise-only intervals.">
@@ -1814,7 +1904,36 @@ def build_recordings_html(
       </span>
     </div>
   </section>
+  <section class="recording-batch-panel">
+    <span id="recordingFilterStatus" role="status"></span>
+    <span id="recordingDecodeStatus" role="status" aria-live="polite">Select recordings to decode or transcribe.</span>
+    <button id="cancelRecordingDecode" type="button" hidden>Cancel decoding</button>
+    <a href="/sstv-files" target="_blank" rel="noopener">SSTV Gallery</a>
+    <span>APRS positions also appear under View → APRS Spots.</span>
+  </section>
+  <dialog id="satelliteFilterDialog" aria-labelledby="satelliteFilterTitle">
+    <h2 id="satelliteFilterTitle">Filter recordings by satellite / source</h2>
+    <p>Choose which names to display. Hidden recordings are unchecked.</p>
+    <div class="controls"><button type="button" id="filterSelectAll">Select all</button>
+      <button type="button" id="filterSelectNone">Clear all</button></div>
+    <div id="satelliteFilterChoices"></div>
+    <div class="controls"><button type="button" id="filterApply">Apply filter</button>
+      <button type="button" id="filterCancel">Cancel</button></div>
+  </dialog>
+  <p id="noFilteredRecordings" class="recordings-message" hidden>No recordings match the selected satellites.</p>
+  <p class="speech-note">Choose one language button, then Transcribe speech for the checked recordings. Transcription runs locally. First use downloads the selected model (one multilingual model covers all listed languages); recordings stay on this computer.
+    Radio callsigns, signal reports and grid squares may need correction—use timestamps to check the audio.</p>
+  <dialog id="transcriptDialog" aria-labelledby="transcriptTitle">
+    <div class="transcript-heading"><h2 id="transcriptTitle">Speech transcript</h2>
+      <button type="button" id="transcriptClose">Close</button></div>
+    <p id="transcriptStatus" role="status" aria-live="polite"></p>
+    <audio id="transcriptPlayer" controls preload="metadata"></audio>
+    <p>Click a timestamp to replay the original audio. Uncertain passages are marked; unmarked text may also contain errors.</p>
+    <a id="transcriptDownload" hidden>Download transcript as text</a>
+    <div id="transcriptSegments"></div>
+  </dialog>
   __CONTENT__
+  <link rel="stylesheet" href="/recordings-controls.css">
   <script>
     const player = document.getElementById('recordingPlayer');
     const nowPlaying = document.getElementById('nowPlaying');
@@ -2205,7 +2324,7 @@ def build_recordings_html(
 
     async function analyzeAudioBuffer(buffer, generation) {
       const duration = Number(buffer.duration) || 0;
-      if (!(duration > 0)) throw new Error('The selected MP3 has no decodable audio.');
+      if (!(duration > 0)) throw new Error('The selected audio has no decodable audio.');
 
       const fftSize = 512;
       const nativeRate = buffer.sampleRate;
@@ -2442,14 +2561,93 @@ def build_recordings_html(
       return normalizeStart(bestRepeatedTwice);
     }
 
+    async function prepareMorseAudioBuffer(buffer, progressCallback) {
+      if (!(Number(buffer.duration) > 0)) throw new Error('The selected audio has no decodable audio.');
+      const stride = Math.max(1, Math.round(buffer.sampleRate / 8000));
+      if (stride === 1) { progressCallback(10); return buffer; }
+      const rate = buffer.sampleRate / stride;
+      const length = Math.ceil(buffer.length / stride);
+      const channels = [];
+      // Anti-alias BEFORE taking every nth sample. SDR audio can contain
+      // strong energy well above CW; an FFT band limit after decimation
+      // cannot remove that energy once it has folded into the wanted band.
+      // A symmetric windowed-sinc FIR keeps dots/dashes and abrupt retunes
+      // aligned in time. Compute only the decimated output samples; no large
+      // native-rate filtered copy or browser-specific audio API is needed.
+      const half = 16 * stride;
+      const taps = new Float64Array(2 * half + 1);
+      const cutoff = Math.min(3600, rate * 0.49) / buffer.sampleRate;
+      let sum = 0;
+      for (let index = 0; index < taps.length; index += 1) {
+        const x = index - half;
+        const sinc = x === 0 ? 2 * cutoff : Math.sin(2 * Math.PI * cutoff * x) / (Math.PI * x);
+        const window = 0.42 - 0.5 * Math.cos(2 * Math.PI * index / (taps.length - 1)) +
+          0.08 * Math.cos(4 * Math.PI * index / (taps.length - 1));
+        taps[index] = sinc * window;
+        sum += taps[index];
+      }
+      for (let index = 0; index < taps.length; index += 1) taps[index] /= sum;
+      for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+        const source = buffer.getChannelData(channel);
+        const output = new Float32Array(length);
+        for (let index = 0; index < length; index += 1) {
+          const first = index * stride - half;
+          let value = 0;
+          const begin = Math.max(0, -first), end = Math.min(taps.length, source.length - first);
+          for (let tap = begin; tap < end; tap += 1) value += taps[tap] * source[first + tap];
+          output[index] = value;
+          if (index % 32768 === 0) {
+            progressCallback(Math.round(10 * (channel + index / length) / buffer.numberOfChannels));
+            await new Promise(resolve => window.setTimeout(resolve, 0));
+          }
+        }
+        channels.push(output);
+      }
+      progressCallback(10);
+      return {duration: buffer.duration, length, sampleRate: rate,
+        numberOfChannels: channels.length, getChannelData: channel => channels[channel]};
+    }
+
     async function decodeMorseAudioBuffer(buffer, progressCallback = () => {}) {
+      // Prepare once and reuse for the weak-signal retry. Channels stay
+      // separate so opposite-polarity stereo cannot cancel the wanted signal.
+      const prepared = await prepareMorseAudioBuffer(buffer, progressCallback);
+      let result;
+      try {
+        // Keep short windows for fast keying and retunes. Weak tones may need
+        // twice the integration time to stand out from receiver noise.
+        result = await analyzeMorseAudioBuffer(prepared,
+          value => progressCallback(10 + Math.round(value * 0.40)), 128);
+      } catch (error) {
+        if (error.code !== 'CW_NO_KEYING') throw error;
+        return analyzeMorseAudioBuffer(prepared,
+          value => progressCallback(50 + Math.round(value * 0.50)), 256);
+      }
+      // Filtering can expose a weak signal just enough for the short-window
+      // pass to return incomplete keying instead of requesting its retry.
+      // Compare the existing signal/timing scores when that first result is
+      // marginal. This score does not establish correctness of the text.
+      if (result.confidence < 85) {
+        try {
+          const integrated = await analyzeMorseAudioBuffer(prepared,
+            value => progressCallback(50 + Math.round(value * 0.50)), 256);
+          if (integrated.confidence > result.confidence) result = integrated;
+        } catch (error) {
+          // An optional longer window may not resolve fast/irregular keying;
+          // retain the usable short-window result in that case.
+        }
+      }
+      progressCallback(100);
+      return result;
+    }
+
+    async function analyzeMorseAudioBuffer(buffer, progressCallback, fftSize) {
       const duration = Number(buffer.duration) || 0;
-      if (!(duration > 0)) throw new Error('The selected MP3 has no decodable audio.');
+      if (!(duration > 0)) throw new Error('The selected audio has no decodable audio.');
 
       // Each short frame searches the entire CW audio band for a narrow peak.
       // No fixed pitch is assumed, so a Doppler-shifted tone can move freely
       // between frames while its keyed timing remains intact.
-      const fftSize = 128;
       const nativeRate = buffer.sampleRate;
       const stride = Math.max(1, Math.round(nativeRate / 8000));
       const analysisRate = nativeRate / stride;
@@ -2480,8 +2678,8 @@ def build_recordings_html(
       const temporalProminence = new Float32Array(frameCount);
       const temporalScores = new Float32Array(frameCount * bandBinCount);
       const spectralPowers = new Float32Array(frameCount * bandBinCount);
-      // Bounded by the frame cap (about 70 MB total spectral working storage
-      // at 8 kHz). No recording-sized JavaScript object graph is created.
+      // Bounded by the frame cap (up to about 140 MB spectral working storage
+      // for the weak-tone pass). No recording-sized object graph is created.
       const carrierMask = new Uint8Array(frameCount * bandBinCount);
       const epsilon = 1e-20;
       const noiseFall = 1 - Math.exp(-frameSeconds / 0.1);
@@ -2490,21 +2688,25 @@ def build_recordings_html(
       for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
         const centerSample = Math.floor(((frameIndex + 0.5) / frameCount) * buffer.length);
         const firstSample = centerSample - Math.floor(fftSize * stride / 2);
-        for (let sampleIndex = 0; sampleIndex < fftSize; sampleIndex += 1) {
-          const nativeIndex = clamp(firstSample + sampleIndex * stride, 0, buffer.length - 1);
-          let sample = 0;
-          for (let channel = 0; channel < channels.length; channel += 1) {
-            sample += channels[channel][nativeIndex];
+        bandPowers.fill(0);
+        // Combine spectral power, not waveforms: stereo channels can carry
+        // the same CW with opposite polarity and cancel in a mono mix.
+        for (let channel = 0; channel < channels.length; channel += 1) {
+          for (let sampleIndex = 0; sampleIndex < fftSize; sampleIndex += 1) {
+            const nativeIndex = clamp(firstSample + sampleIndex * stride, 0, buffer.length - 1);
+            real[sampleIndex] = channels[channel][nativeIndex] * windowValues[sampleIndex];
+            imaginary[sampleIndex] = 0;
           }
-          sample /= Math.max(1, channels.length);
-          real[sampleIndex] = sample * windowValues[sampleIndex];
-          imaginary[sampleIndex] = 0;
+          fftInPlace(real, imaginary);
+          for (let bin = firstBin; bin <= lastBin; bin += 1) {
+            bandPowers[bin - firstBin] +=
+              (real[bin] * real[bin] + imaginary[bin] * imaginary[bin]) / channels.length;
+          }
         }
-        fftInPlace(real, imaginary);
 
         for (let bin = firstBin; bin <= lastBin; bin += 1) {
-          const power = real[bin] * real[bin] + imaginary[bin] * imaginary[bin] + epsilon;
           const slot = bin - firstBin;
+          const power = bandPowers[slot] + epsilon;
           bandPowers[slot] = power;
           spectralPowers[frameIndex * bandBinCount + slot] = power;
           if (frameIndex === 0) noisePowers[slot] = power;
@@ -2643,7 +2845,8 @@ def build_recordings_html(
       const globalClusters = twoMeans(prominenceDb);
       const globalSeparation = globalClusters.high - globalClusters.low;
       if (globalSeparation < 6.0) {
-        throw new Error('No clearly keyed narrowband Morse tone was found.');
+        throw Object.assign(new Error('No clearly keyed narrowband Morse tone was found.'),
+          {code: 'CW_NO_KEYING'});
       }
 
       // Re-estimate the on/off threshold in short blocks. This follows fading
@@ -2664,13 +2867,18 @@ def build_recordings_html(
             gateValues.push(prominenceDb[i]);
           }
           const clusters = twoMeans(gateValues);
-          hasKeying = clusters.high - clusters.low >= 6 && clusters.high >= 16;
+          // The longer window resolves weaker tones. Still require distinct
+          // on/off clusters to avoid treating noise as keying.
+          hasKeying = clusters.high - clusters.low >= 6 && clusters.high >= (fftSize > 128 ? 14 : 16);
         }
         if (!hasKeying) continue;
         const localValues = prominenceDb.slice(Math.max(0, start - contextFrames),
           Math.min(frameCount, end + contextFrames));
         const high = percentile(localValues, 0.85);
-        const threshold = Math.max(12, high - 10);
+        // Once a peak is 25 dB above nearby noise it is clearly tonal. Do
+        // not let unusually clean tones (or the retune repair) raise the
+        // threshold beyond that and erase dots at another pitch.
+        const threshold = clamp(high - 10, 12, 25);
         for (let index = start; index < end; index += 1) {
           if (prominenceDb[index] >= threshold) rawMask[index] = 1;
         }
@@ -2683,7 +2891,8 @@ def build_recordings_html(
         .map(run => run.length * frameSeconds)
         .filter(value => value >= Math.max(0.012, frameSeconds) && value <= 0.65);
       if (pulseDurations.length < 8) {
-        throw new Error('Too few regularly keyed pulses were found to decode Morse.');
+        throw Object.assign(new Error('Too few regularly keyed pulses were found to decode Morse.'),
+          {code: 'CW_NO_KEYING'});
       }
 
       const pulseClusters = twoMeans(pulseDurations, 0.25, 0.75);
@@ -2835,18 +3044,19 @@ def build_recordings_html(
     }
 
     function updateMorseSelectionState() {
-      const boxes = Array.from(document.querySelectorAll('.morse-checkbox'));
+      const boxes = Array.from(document.querySelectorAll('.morse-checkbox')).filter(box => !box.closest('tr').hidden);
       const selectedCount = boxes.filter(box => box.checked).length;
       morseDecodeButton.disabled = morseDecodeRunning || selectedCount === 0;
       if (selectAllMorse) {
         selectAllMorse.checked = boxes.length > 0 && selectedCount === boxes.length;
         selectAllMorse.indeterminate = selectedCount > 0 && selectedCount < boxes.length;
       }
+      window.updateRecordingDecodeSelection?.();
     }
 
     async function decodeCheckedMorse() {
       const selected = Array.from(document.querySelectorAll('.morse-checkbox'))
-        .filter(checkbox => checkbox.checked);
+        .filter(checkbox => checkbox.checked && !checkbox.closest('tr').hidden);
       if (!selected.length || morseDecodeRunning) return;
       morseDecodeRunning = true;
       updateMorseSelectionState();
@@ -2862,11 +3072,11 @@ def build_recordings_html(
           const url = checkbox.dataset.url;
           if (!cell || !url) continue;
           checkbox.disabled = true;
-          setMorseCellStatus(cell, 'Loading MP3…');
+          setMorseCellStatus(cell, 'Loading audio…');
           morseBatchStatus.textContent = `Decoding ${itemIndex + 1} of ${selected.length}: ${name}`;
           try {
             const response = await fetch(url, {cache: 'no-store'});
-            if (!response.ok) throw new Error(`MP3 request failed with HTTP ${response.status}.`);
+            if (!response.ok) throw new Error(`audio request failed with HTTP ${response.status}.`);
             const encodedAudio = await response.arrayBuffer();
             setMorseCellStatus(cell, 'Decoding audio…');
             const decodedAudio = await context.decodeAudioData(encodedAudio.slice(0));
@@ -2897,12 +3107,12 @@ def build_recordings_html(
 
     async function analyzeRecording(url, generation) {
       try {
-        analysisStatus.textContent = 'Loading MP3 for analysis…';
+        analysisStatus.textContent = 'Loading audio for analysis…';
         const response = await fetch(url, {cache: 'no-store'});
-        if (!response.ok) throw new Error(`The MP3 request failed with HTTP ${response.status}.`);
+        if (!response.ok) throw new Error(`The audio request failed with HTTP ${response.status}.`);
         const encodedAudio = await response.arrayBuffer();
         if (generation !== analysisGeneration) return;
-        analysisStatus.textContent = 'Decoding MP3…';
+        analysisStatus.textContent = 'Decoding audio…';
         const context = await ensureAudioGraph();
         const decodedAudio = await context.decodeAudioData(encodedAudio.slice(0));
         if (generation !== analysisGeneration) return;
@@ -2947,7 +3157,7 @@ def build_recordings_html(
     document.querySelectorAll('.play-button, .recording-link').forEach(control => {
       control.addEventListener('click', event => {
         // Play filename links here, preserving the recording list and decode
-        // results. Modified clicks still allow opening the MP3 separately.
+        // results. Modified clicks still allow opening the audio separately.
         if (control.matches('a') && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
         event.preventDefault();
         selectRecording(control);
@@ -2960,7 +3170,7 @@ def build_recordings_html(
     if (selectAllMorse) {
       selectAllMorse.addEventListener('change', () => {
         document.querySelectorAll('.morse-checkbox').forEach(checkbox => {
-          checkbox.checked = selectAllMorse.checked;
+          if (!checkbox.closest('tr').hidden) checkbox.checked = selectAllMorse.checked;
         });
         updateMorseSelectionState();
       });
@@ -3047,6 +3257,8 @@ def build_recordings_html(
     updateMorseSelectionState();
     window.requestAnimationFrame(visualizationLoop);
   </script>
+  <script src="/recordings-controls.js"></script>
+  <script src="/speech-controls.js"></script>
 </body>
 </html>
 """.replace("__SOURCE__", source_text).replace("__CONTENT__", content).replace(
@@ -3129,7 +3341,7 @@ def build_logs_html(
         file_url = "/log-file?name=" + quote(log_path.name, safe="")
         modified = datetime.fromtimestamp(stat.st_mtime).astimezone()
         rows.append(
-            '<tr><td><a href="{url}" target="_blank" rel="noopener">{name}</a></td>'
+            '<tr><td><a href="{url}">{name}</a></td>'
             '<td data-sort="{mtime:.6f}">{modified}</td><td>{size}</td></tr>'.format(
                 url=file_url,
                 name=safe_name,
@@ -3211,6 +3423,43 @@ def build_logs_html(
 """.replace("__SOURCE__", html.escape(str(directory))).replace(
         "__CONTENT__", content
     ).replace("__UI_THEME__", _parse_ui_theme(ui_theme))
+
+
+def build_log_view_html(name: str, content: str, ui_theme: str = DEFAULT_UI_THEME) -> str:
+    """Display log text safely with navigation even in windows without browser controls."""
+    theme = _parse_ui_theme(ui_theme)
+    return f'''<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(name)} — BQE WISP Logs</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #b9b9b9; color: #111; font-family: Arial, sans-serif; }}
+    header {{ position: sticky; top: 0; display: flex; flex-wrap: wrap; align-items: center;
+      gap: 16px; padding: 12px 16px; background: #d2d2d2; border-bottom: 2px solid #777; }}
+    h1 {{ margin: 0; font-size: 20px; overflow-wrap: anywhere; min-width: 0; flex: 1; }}
+    a, button {{ padding: 8px 12px; color: #05058a; background: #eee;
+      border: 1px solid #777; font: inherit; cursor: pointer; }}
+    a:focus-visible, button:focus-visible {{ outline: 2px solid #05058a; outline-offset: 2px; }}
+    pre {{ margin: 16px; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.5 Consolas, monospace; }}
+    body.modern-ui {{ background: #071321; color: #edf2f7; }}
+    body.modern-ui header {{ background: #102943; border-color: #3f7199; }}
+    body.modern-ui a, body.modern-ui button {{ background: #1b4569; color: #f7fbff;
+      border-color: #477aa3; border-radius: 7px; }}
+    body.modern-ui a:focus-visible, body.modern-ui button:focus-visible {{ outline-color: #66d9ff; }}
+  </style>
+</head>
+<body class="{theme}-ui">
+  <header>
+    <a href="/logs">&#8592; Back to logs</a>
+    <h1>{html.escape(name)}</h1>
+    <button type="button" onclick="window.location.reload()">Refresh</button>
+  </header>
+  <pre>{html.escape(content)}</pre>
+</body>
+</html>'''
 
 
 def write_create_preset_payload(request_payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -3460,6 +3709,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       scrollbar-color: #505050 #b5b5b5;
       scrollbar-width: auto;
       scroll-behavior: auto;
+      overflow-anchor: none;
     }
     .schedule::-webkit-scrollbar { width: 18px; height: 18px; }
     .schedule::-webkit-scrollbar-track { background: #b5b5b5; border: 2px inset #d0d0d0; }
@@ -3565,6 +3815,28 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     }
     tr.done { color: #777; }
     tr.pending { color: #111; }
+    #passRows td { font-weight: 400; }
+    #passRows tr.active td,
+    #passRows tr.pending td { font-weight: 700; }
+    .next-pass-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      margin-right: 8px;
+      border: 1px solid #806000;
+      border-radius: 50%;
+      background: #ffdf00;
+      box-shadow: 0 0 5px rgba(255, 210, 0, .8);
+      vertical-align: middle;
+      animation: next-pass-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes next-pass-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .25; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .next-pass-indicator { animation: none; }
+    }
     .map-panel {
       grid-column: 3;
       grid-row: 1;
@@ -3785,6 +4057,12 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     }
     .state-indicator.enabled .state-value { color: #075f07; }
     .message { margin-top: 10px; font-size: 20px; }
+    .message:empty { display: none; }
+    .runtime-state-indicators { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    #pluginStatusIndicators { display: contents; }
+    .runtime-state-indicators .state-indicator { max-width: 100%; box-sizing: border-box; }
+    .runtime-state-indicators .state-value { overflow-wrap: anywhere; }
+    .runtime-state-indicators .state-indicator.enabled { background: #d9efda; border-color: #278b47; }
     @media (max-width: 1180px) {
       /* Preserve each selected pane and allow horizontal scrolling on narrow screens. */
       .console {
@@ -3831,7 +4109,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       align-items: stretch;
       min-height: 30px;
     }
-    .help-menu {
+    .admin-menu {
       margin-left: auto;
     }
     .tracking-submenu {
@@ -4100,7 +4378,8 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     .general-settings-original {
       background: rgba(235,235,235,.72);
     }
-    .general-settings-table input {
+    .general-settings-table input,
+    .general-settings-table select {
       width: 100%;
       min-width: 0;
       padding: 5px 7px;
@@ -4953,7 +5232,8 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     }
     /* Normal Current values use the standard Modern UI text color.  Yellow is
        reserved exclusively for settings that differ from the template. */
-    body.modern-ui .general-settings-table input {
+    body.modern-ui .general-settings-table input,
+    body.modern-ui .general-settings-table select {
       background: #07131c;
       color: #d6e8f3;
       border-color: #466d86;
@@ -5181,6 +5461,8 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Sound-card audio">Audio</button>
       <div class="submenu" role="menu" aria-label="Audio menu">
         <button type="button" role="menuitemcheckbox" aria-checked="false" id="streamAudioMenuItem">Stream Audio</button>
+        <button type="button" role="menuitemcheckbox" aria-checked="false" id="listenAudioMenuItem">Listen</button>
+        <button type="button" role="menuitemcheckbox" aria-checked="false" id="speechAnnouncementsMenuItem" disabled title="Enable or silence pass announcements for this session; resets to your configured setting on restart.">Speech Announcements</button>
         <button type="button" role="menuitem" id="recordAudioMenuItem" disabled>Record Audio</button>
       </div>
     </div>
@@ -5190,38 +5472,19 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         <button type="button" role="menuitemcheckbox" aria-checked="false" id="mapMenuItem">Map</button>
         <button type="button" role="menuitemcheckbox" aria-checked="false" id="presetMenuItem">Show Presets</button>
         <button type="button" role="menuitem" id="sstvFilesMenuItem">SSTV Gallery</button>
+        <button type="button" role="menuitem" id="weatherMenuItem">Weather</button>
+        <button type="button" role="menuitem" id="aprsSpotsMenuItem">APRS Spots</button>
+        <button type="button" role="menuitem" id="telemetryMenuItem" aria-haspopup="dialog" aria-controls="telemetryModal">Telemetry</button>
         <button type="button" role="menuitem" id="recordingsMenuItem">Recordings</button>
         <button type="button" role="menuitem" id="logsMenuItem">Logs</button>
         <button type="button" role="menuitem" id="sdrConsoleMenuItem" hidden>SDR Console</button>
         <button type="button" role="menuitem" id="fdtConsoleMenuItem" disabled>FDT Console</button>
       </div>
     </div>
-    <div class="menu config-menu" role="none">
-      <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Configuration options">Config</button>
-      <div class="submenu config-submenu" role="menu" aria-label="Config menu">
-        <button type="button" role="menuitem" id="configQthMenuItem">QTH</button>
-        <button type="button" role="menuitem" id="configRadioMenuItem">Radio</button>
-        <div class="submenu-group" role="none">
-          <button type="button" role="menuitem" id="configPresetsMenuItem" aria-haspopup="true" aria-expanded="false">Presets</button>
-          <div class="submenu nested-submenu" role="menu" aria-label="Preset configuration menu">
-            <button type="button" role="menuitem" id="configCreatePresetMenuItem">Create Preset</button>
-            <button type="button" role="menuitem" id="configEditPresetMenuItem">Edit existing Preset</button>
-          </div>
-        </div>
-        <div class="submenu-group" role="none">
-          <button type="button" role="menuitem" id="configAdvancedMenuItem" aria-haspopup="true" aria-expanded="false">Advanced</button>
-          <div class="submenu nested-submenu" role="menu" aria-label="Advanced configuration menu">
-            <button type="button" role="menuitem" id="configGeneralSettingsMenuItem">Edit general_settings.yaml</button>
-            <button type="button" role="menuitem" id="configSatellitesMenuItem">Edit satellites.yaml</button>
-            <button type="button" role="menuitem" id="configAddSatelliteMenuItem">Add new Satellite Definition</button>
-          </div>
-        </div>
-      </div>
-    </div>
     <div class="menu tracking-menu" role="none">
       <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Scheduling tools">Scheduling</button>
       <div class="submenu tracking-submenu" role="menu" aria-label="Scheduling menu">
-        <button type="button" role="menuitem" id="updateKepsMenuItem">Update Keps</button>
+        <button type="button" role="menuitem" id="updateKepsMenuItem" aria-busy="false">Update Keps</button>
         <button type="button" role="menuitem" id="schedulePassesMenuItem" aria-busy="false" title="Run bqe_schedule_passes.py --auto_schedule">Auto-Schedule Passes</button>
         <button type="button" role="menuitem" id="customSchedulePassesMenuItem" aria-busy="false" title="Choose satellite nicknames and schedule only those satellites">Custom Schedule Passes</button>
       </div>
@@ -5240,9 +5503,42 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         <button type="button" role="menuitem" id="enableFdtMenuItem" disabled>Enable FDT</button>
       </div>
     </div>
+    <div class="menu admin-menu" role="none">
+      <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false">Admin</button>
+      <div class="submenu" role="menu" aria-label="Admin menu">
+        <button type="button" role="menuitem" id="backupSettingsMenuItem">Backup settings</button>
+        <button type="button" role="menuitem" id="restoreSettingsMenuItem">Restore settings</button>
+        <button type="button" role="menuitem" id="backupDownloadedDataMenuItem">Backup Downloaded Data</button>
+        <button type="button" role="menuitem" id="restoreDownloadedDataMenuItem">Restore downloaded data</button>
+      </div>
+    </div>
+    <div class="menu config-menu" role="none">
+      <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Configuration options">Config</button>
+      <div class="submenu config-submenu" role="menu" aria-label="Config menu">
+        <button type="button" role="menuitem" id="configQthMenuItem">QTH</button>
+        <button type="button" role="menuitem" id="configRadioMenuItem">Radio</button>
+        <button type="button" role="menuitem" id="configAprsUploadMenuItem">APRS Upload</button>
+        <div class="submenu-group" role="none">
+          <button type="button" role="menuitem" id="configPresetsMenuItem" aria-haspopup="true" aria-expanded="false">Presets</button>
+          <div class="submenu nested-submenu" role="menu" aria-label="Preset configuration menu">
+            <button type="button" role="menuitem" id="configCreatePresetMenuItem">Create Preset</button>
+            <button type="button" role="menuitem" id="configEditPresetMenuItem">Edit existing Preset</button>
+          </div>
+        </div>
+        <div class="submenu-group" role="none">
+          <button type="button" role="menuitem" id="configAdvancedMenuItem" aria-haspopup="true" aria-expanded="false">Advanced</button>
+          <div class="submenu nested-submenu" role="menu" aria-label="Advanced configuration menu">
+            <button type="button" role="menuitem" id="configGeneralSettingsMenuItem">Edit general_settings.yaml</button>
+            <button type="button" role="menuitem" id="configSatellitesMenuItem">Edit satellites.yaml</button>
+            <button type="button" role="menuitem" id="configAddSatelliteMenuItem">Add new Satellite Definition</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="menu help-menu" role="none">
       <button class="menu-button" type="button" aria-haspopup="true" aria-expanded="false" title="Help">Help</button>
       <div class="submenu" role="menu" aria-label="Help menu">
+        <button type="button" role="menuitem" id="storageLocationMenuItem">Storage Location</button>
         <button type="button" role="menuitem" id="environmentDiagnosticsMenuItem">Perform Environment Diagnostics</button>
         <button type="button" role="menuitem" id="licenseMenuItem">Show License</button>
         <button type="button" role="menuitem" id="aboutMenuItem">About</button>
@@ -5250,12 +5546,25 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     </div>
   </nav>
 
+  <dialog id="storageLocationDialog" class="panel" aria-labelledby="storageLocationTitle" style="width:min(700px,90vw);padding:24px;border-radius:16px;color:inherit;">
+    <h2 id="storageLocationTitle" style="margin:0 0 12px">Storage Location</h2>
+    <p>BQE Wisp's main folder on the computer running the application:</p>
+    <label for="storageLocationPath">Main folder</label>
+    <input id="storageLocationPath" type="text" readonly value="__BQE_STORAGE_LOCATION__" style="display:block;box-sizing:border-box;width:100%;margin-top:8px;padding:10px;font-family:monospace;">
+    <p>Configuration is in the bqe_config subfolder. Logs and recordings use this folder unless configured elsewhere.</p>
+    <p id="storageLocationMessage" role="status"></p>
+    <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:18px">
+      <button type="button" id="storageLocationCopy">Copy path</button>
+      <button type="button" id="storageLocationClose">Close</button>
+    </div>
+  </dialog>
+
   <div class="about-modal" id="aboutModal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="aboutTitle">
     <div class="about-box panel">
       <button class="about-close" type="button" id="aboutClose" aria-label="Close about dialog">&times;</button>
       <div class="about-title" id="aboutTitle">About BQE WISP</div>
       <div class="about-line"><span>Author</span><strong>Al Lawler WB1BQE</strong></div>
-      <div class="about-line"><span>Version</span><strong>0.6</strong></div>
+      <div class="about-line"><span>Version</span><strong>V 0.7-beta5</strong></div>
     </div>
   </div>
 
@@ -5296,6 +5605,36 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         </div>
         <div class="config-message" id="qthMessage"></div>
       </form>
+    </div>
+  </div>
+
+  <div class="config-modal" id="telemetryModal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="telemetryTitle">
+    <div class="config-box panel">
+      <button class="config-close" type="button" id="telemetryClose" aria-label="Close telemetry console">&times;</button>
+      <div class="config-title" id="telemetryTitle">Telemetry</div>
+      <div class="config-fields telemetry-selector">
+        <label for="telemetrySatelliteSelect">Satellite</label>
+        <select id="telemetrySatelliteSelect" disabled><option>Loading satellites...</option></select>
+      </div>
+      <p id="telemetryDescription"></p>
+      <div class="telemetry-summary">
+        <div><span>Decoded at</span><strong id="telemetryTime">—</strong></div>
+        <div><span>Packet source</span><strong id="telemetrySource">—</strong></div>
+        <div><span>Format / validation</span><strong id="telemetryFormat">—</strong></div>
+      </div>
+      <div class="config-fields telemetry-selector">
+        <label for="telemetryPacketSelect">Packet history</label>
+        <select id="telemetryPacketSelect"><option value="latest">Latest packet (auto-update)</option></select>
+      </div>
+      <p class="config-message" id="telemetryMessage" role="status" aria-live="polite"></p>
+      <div id="telemetryFields"></div>
+      <details id="telemetryRawDetails"><summary>Raw packet and metadata</summary><pre id="telemetryRaw"></pre></details>
+      <p id="telemetryLogPath"></p>
+      <p id="telemetryScope"></p>
+      <div class="config-actions">
+        <button type="button" id="telemetryRefresh">Refresh</button>
+        <button type="button" id="telemetryDone">Close</button>
+      </div>
     </div>
   </div>
 
@@ -5609,7 +5948,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       </div>
     </aside>
 
-    <main class="schedule panel">
+    <main class="schedule panel" tabindex="0" aria-label="Pass schedule">
       <table>
         <thead>
           <tr><th>Satellite</th><th>Type</th><th>El</th><th>Start Time</th><th>Finish Time</th></tr>
@@ -5664,6 +6003,14 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
           </div>
         </div>
       </div>
+      <div class="runtime-state-indicators" role="group" aria-label="Satellite and running plugins">
+        <div class="state-indicator disabled" id="satelliteStatusIndicator" role="status" aria-label="Tracking idle">
+          <span class="state-check" aria-hidden="true">&times;</span>
+          <span class="state-label">Tracking</span>
+          <strong class="state-value" id="satelliteStatusText">Idle</strong>
+        </div>
+        <div id="pluginStatusIndicators" role="group" aria-label="Running plugins"></div>
+      </div>
       <div class="message" id="message">Starting up...</div>
     </section>
   </div>
@@ -5694,6 +6041,47 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       valueElement.textContent = stateText;
       const checkElement = indicator.querySelector('.state-check');
       if (checkElement) { checkElement.textContent = isEnabled ? '\u2713' : '\u00d7'; }
+    }
+
+    function updateRuntimeIndicators(data) {
+      const active = Boolean(data.tracking_running);
+      const satellite = active
+        ? text(data.current_satellite || data.tracking_status?.satellite_name || data.tracking_status?.satellite || 'Starting pass')
+        : 'Idle';
+      updateStateIndicator('satelliteStatusIndicator', 'satelliteStatusText', 'Tracking', active);
+      set('satelliteStatusText', satellite);
+      document.getElementById('satelliteStatusIndicator').setAttribute('aria-label', `Tracking ${satellite}`);
+
+      const container = document.getElementById('pluginStatusIndicators');
+      const plugins = new Map();
+      for (const plugin of data.running_plugins || []) {
+        if (plugin && plugin.id && plugin.label) { plugins.set(plugin.id, plugin); }
+      }
+      if (data.audio_recording?.active && data.audio_recording.status === 'recording') {
+        plugins.set('audio_recording', {id: 'audio_recording', label: 'Audio recorder'});
+      }
+      if (data.external_audio_recording?.status === 'recording') {
+        plugins.set('pass_audio', {id: 'pass_audio', label: 'Audio recorder'});
+      }
+      const signature = JSON.stringify([...plugins.values()].map(p => [p.id, p.label]));
+      if (container.dataset.signature === signature) { return; }
+      container.dataset.signature = signature;
+      container.replaceChildren(...[...plugins.values()].map(plugin => {
+        const indicator = document.createElement('div');
+        indicator.className = 'state-indicator enabled';
+        indicator.setAttribute('role', 'status');
+        indicator.setAttribute('aria-label', `${plugin.label} running`);
+        indicator.title = 'Plugin process is running; this does not indicate a successful decode.';
+        const check = document.createElement('span');
+        check.className = 'state-check'; check.textContent = '\u2713';
+        check.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.className = 'state-label'; label.textContent = plugin.label;
+        const value = document.createElement('strong');
+        value.className = 'state-value'; value.textContent = 'Running';
+        indicator.append(check, label, value);
+        return indicator;
+      }));
     }
 
     function clearMenuButtonRestoreStyle(button) {
@@ -5781,13 +6169,66 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       row.appendChild(td);
     }
 
-    function resetPassListScroll() {
-      const schedule = document.querySelector('.schedule');
-      if (!schedule) { return; }
-      requestAnimationFrame(() => {
-        schedule.scrollLeft = 0;
+    const passSchedule = document.querySelector('.schedule');
+    let followPassSchedule = true;
+    let expectedScheduleScrollTop = 0;
+    let previousPassStatuses = new Map();
+
+    function updatePassScheduleFollowing(passes) {
+      const statuses = new Map(passes.map(pass => [pass.key, pass.status]));
+      for (const [key, status] of statuses) {
+        const previous = previousPassStatuses.get(key);
+        if (status === 'done' && (previous === 'active' || previous === 'pending')) {
+          followPassSchedule = true;
+          break;
+        }
+      }
+      previousPassStatuses = statuses;
+    }
+
+    if (passSchedule) {
+      // Scroll events also cover dragging the scrollbar and keyboard scrolling.
+      // Compare with our own last position so automatic movement does not pause following.
+      passSchedule.addEventListener('scroll', () => {
+        if (Math.abs(passSchedule.scrollTop - expectedScheduleScrollTop) > 1) {
+          followPassSchedule = false;
+        }
+      }, { passive: true });
+      passSchedule.addEventListener('wheel', event => {
+        if (event.deltaY) { followPassSchedule = false; }
+      }, { passive: true });
+      passSchedule.addEventListener('touchmove', () => {
+        followPassSchedule = false;
+      }, { passive: true });
+      passSchedule.addEventListener('keydown', event => {
+        if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+          followPassSchedule = false;
+        }
       });
     }
+
+    function resetPassListScroll(previousTop = passSchedule?.scrollTop || 0) {
+      if (!passSchedule) { return; }
+      let target = previousTop;
+      if (followPassSchedule) {
+        const rows = document.getElementById('passRows');
+        const boundary = rows.querySelector('tr.active, tr.pending');
+        const last = rows.querySelector('tr.done:last-child');
+        const row = boundary || last;
+        if (row) {
+          const viewport = passSchedule.getBoundingClientRect();
+          const rect = row.getBoundingClientRect();
+          const headerHeight = passSchedule.querySelector('thead').getBoundingClientRect().height;
+          // Center the past/upcoming boundary in the area below the sticky header.
+          target = passSchedule.scrollTop + (boundary ? rect.top : rect.bottom) -
+            viewport.top - passSchedule.clientTop - (passSchedule.clientHeight + headerHeight) / 2;
+        }
+      }
+      passSchedule.scrollTop = target;
+      expectedScheduleScrollTop = passSchedule.scrollTop;
+    }
+
+    window.addEventListener('resize', () => resetPassListScroll());
 
 
     let earthMap = null;
@@ -5818,6 +6259,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     let audioRecordingActive = false;
     let audioRecordingCommandInFlight = false;
     let lastAudioRecordingError = null;
+    let speechAnnouncementsCommandInFlight = false;
     let logsWindow = null;
     let detachedMapCloseMonitor = null;
     let detachedFdtCloseMonitor = null;
@@ -6657,6 +7099,23 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         : 'Temporarily disable antenna tracking, overriding the satellite setting';
     }
 
+    let updateKepsRunning = false;
+
+    function setUpdateKepsRunning(running) {
+      updateKepsRunning = Boolean(running);
+      const button = document.getElementById('updateKepsMenuItem');
+      if (!button) { return; }
+      window.clearTimeout(button.bqeMenuFlashTimer);
+      button.classList.remove('menu-click-flash');
+      button.classList.toggle('menu-command-running', updateKepsRunning);
+      button.setAttribute('aria-busy', updateKepsRunning ? 'true' : 'false');
+      button.disabled = updateKepsRunning;
+      button.style.background = '';
+      button.style.color = '';
+      button.style.boxShadow = '';
+      if (!updateKepsRunning) { button.blur(); }
+    }
+
     function setSchedulePassesRunning(running) {
       const button = document.getElementById('schedulePassesMenuItem');
       if (!button) { return; }
@@ -6665,7 +7124,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       button.classList.remove('menu-click-flash');
       button.classList.toggle('menu-command-running', isRunning);
       button.setAttribute('aria-busy', isRunning ? 'true' : 'false');
-      button.disabled = isRunning;
+      button.disabled = isRunning || updateKepsRunning;
       button.style.background = '';
       button.style.color = '';
       button.style.boxShadow = '';
@@ -6680,7 +7139,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       button.classList.remove('menu-click-flash');
       button.classList.toggle('menu-command-running', isRunning);
       button.setAttribute('aria-busy', isRunning ? 'true' : 'false');
-      button.disabled = isRunning;
+      button.disabled = isRunning || updateKepsRunning;
       button.style.background = '';
       button.style.color = '';
       button.style.boxShadow = '';
@@ -6703,6 +7162,14 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         const sdrConsoleItem = document.getElementById('sdrConsoleMenuItem');
         sdrConsoleItem.hidden = !data.sdr_console_url;
         sdrConsoleItem.dataset.url = data.sdr_console_url || '';
+        const speechItem = document.getElementById('speechAnnouncementsMenuItem');
+        if (speechItem) {
+          const enabled = data.speech_announcements_enabled === true;
+          speechItem.setAttribute('aria-checked', enabled ? 'true' : 'false');
+          speechItem.textContent = `${enabled ? '✓ ' : ''}Speech Announcements`;
+          speechItem.disabled = speechAnnouncementsCommandInFlight || Boolean(data.shutdown_requested) ||
+            typeof data.speech_announcements_enabled !== 'boolean';
+        }
         const recording = data.audio_recording || {};
         updateRecordingIndicator(recording, data.external_audio_recording || {});
         audioRecordingActive = Boolean(recording.active);
@@ -6729,6 +7196,9 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
           showServerExitedMessage();
           return;
         }
+        setUpdateKepsRunning(
+          Boolean(data.command_running) && text(data.last_command).toLowerCase() === 'update_keps'
+        );
         setSchedulePassesRunning(
           Boolean(data.command_running) && text(data.last_command).toLowerCase() === 'schedule_passes'
         );
@@ -6867,30 +7337,46 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         set('detailRange', readout(status.range_km ? `${Number(status.range_km).toFixed(0)} km` : status.range));
         set('detailAltitude', Number.isFinite(satelliteAltitudeKm) ? `${satelliteAltitudeKm.toFixed(0)} km` : '--');
         set('detailDoppler', Number.isFinite(doppler) ? `${doppler.toFixed(0)} Hz` : readout(status.doppler));
-        set('message', status.satellite ? `Tracking ${status.satellite}` : (data.message || ''));
+        updateRuntimeIndicators(data);
+        set('message', data.tracking_running && /^Tracking /.test(data.message || '') ? '' : (data.message || ''));
         renderPresetButtons(
           data.presets || [],
           Boolean(data.preset_buttons_enabled) && !presetCommandInFlight
         );
 
         const rows = document.getElementById('passRows');
+        const previousScheduleTop = passSchedule?.scrollTop || 0;
+        updatePassScheduleFollowing(data.passes);
         rows.innerHTML = '';
         if (!data.passes.length) {
           rows.innerHTML = '<tr><td colspan="5">No passes loaded from schedule.json</td></tr>';
-          resetPassListScroll();
+          resetPassListScroll(previousScheduleTop);
           return;
         }
+        const passIsActive = Boolean(data.pass_active || data.tracking_running) ||
+          data.passes.some(pass => pass.status === 'active');
+        const nextPass = passIsActive ? null : data.passes.find(pass => pass.status === 'pending');
         for (const pass of data.passes) {
           const tr = document.createElement('tr');
           tr.className = pass.status + (pass.test_pass ? ' test-pass' : '');
           addCell(tr, pass.satellite);
+          if (pass === nextPass) {
+            const indicator = document.createElement('span');
+            indicator.className = 'next-pass-indicator';
+            indicator.setAttribute('role', 'img');
+            indicator.setAttribute('aria-label', 'Next pass');
+            indicator.title = 'Next pass';
+            // Preserve the pulse phase when status updates rebuild the rows.
+            indicator.style.animationDelay = `-${Date.now() % 1600}ms`;
+            tr.firstElementChild.prepend(indicator);
+          }
           addCell(tr, pass.satellite_type);
           addCell(tr, pass.el);
           addCell(tr, pass.start);
           addCell(tr, pass.finish);
           rows.appendChild(tr);
         }
-        resetPassListScroll();
+        resetPassListScroll(previousScheduleTop);
       } catch (err) {
         updateRecordingIndicator();
         set('message', 'Web console update failed: ' + err);
@@ -7006,6 +7492,13 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       }
     }
 
+    document.getElementById('weatherMenuItem').addEventListener('click', () => {
+      const gallery = window.open('/weather', 'bqeWispWeather',
+        'popup=yes,width=1100,height=800,resizable=yes,scrollbars=yes');
+      if (gallery) { gallery.focus(); }
+      else { set('message', 'The Weather window was blocked. Allow popups for this site and try again.'); }
+    });
+
     function openRecordingsWindow() {
       if (recordingsWindow && !recordingsWindow.closed) {
         recordingsWindow.focus();
@@ -7021,6 +7514,22 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         set('message', 'The Recordings window was blocked by the browser. Allow popups for this site and try again.');
       }
     }
+
+    ['backup', 'restore'].forEach(mode => {
+      document.getElementById(mode + 'SettingsMenuItem').addEventListener('click', () => {
+        const wizard = window.open('/admin/settings?mode=' + mode, 'bqeSettingsAdmin',
+          'popup=yes,width=900,height=780,resizable=yes,scrollbars=yes');
+        if (!wizard) set('message', 'The settings window was blocked. Allow popups for this site and try again.');
+      });
+    });
+
+    ['backup', 'restore'].forEach(mode => {
+      document.getElementById(mode + 'DownloadedDataMenuItem').addEventListener('click', () => {
+        const wizard = window.open('/admin/downloaded-data?mode=' + mode, 'bqeDownloadedDataAdmin',
+          'popup=yes,width=900,height=780,resizable=yes,scrollbars=yes');
+        if (!wizard) set('message', 'The downloaded-data window was blocked. Allow popups for this site and try again.');
+      });
+    });
 
     function openLogsWindow() {
       if (logsWindow && !logsWindow.closed) {
@@ -7689,10 +8198,17 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
     async function runTrackingCommand(action, label) {
       const isSchedulePasses = action === 'schedule_passes';
+      const isUpdateKeps = action === 'update_keps';
+      if (isUpdateKeps) {
+        setUpdateKepsRunning(true);
+      }
       if (isSchedulePasses) {
         setSchedulePassesRunning(true);
       }
       const result = await runMenuCommand(action, label, true);
+      if (isUpdateKeps && result === null) {
+        setUpdateKepsRunning(false);
+      }
       if (isSchedulePasses && result === null) {
         setSchedulePassesRunning(false);
       }
@@ -8332,8 +8848,11 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
         const currentCell = document.createElement('div');
         currentCell.className = 'general-settings-cell general-settings-current';
-        const input = document.createElement('input');
-        input.type = 'text';
+        const bandwidths = ['0', '100', '200', '250', '300', '500', '1000', '1800',
+          '2400', '2500', '2700', '3000', '6000', '9000', '10000', '12000',
+          '12500', '15000', '16000', '20000', '25000', '50000', '100000', '150000', '200000'];
+        const input = createRadioFieldControl(key, row?.current,
+          key.toLowerCase() === 'bandwidth' ? bandwidths : null);
         input.dataset.satelliteKey = key;
         input.value = row?.current ?? '';
         input.setAttribute('aria-label', 'Current value for ' + key);
@@ -8349,7 +8868,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
     function collectSatellitesEditorFields() {
       const data = {};
-      document.querySelectorAll('#satellitesEditorTable input[data-satellite-key]').forEach((input) => {
+      document.querySelectorAll('#satellitesEditorTable [data-satellite-key]').forEach((input) => {
         data[input.dataset.satelliteKey] = input.value;
       });
       return data;
@@ -8364,8 +8883,11 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         renderSatellitesEditorRows(result.rows || []);
         const editable = applyConfigEditorAccess('#satellitesEditorTable', 'satellitesEditorSaveButton', result.editable);
         setSatellitesEditorMessage(configEditorMessage(result.message || 'Satellite definition loaded.', editable));
-        const firstInput = document.querySelector('#satellitesEditorTable input[data-satellite-key]');
-        if (editable && firstInput) { firstInput.focus(); firstInput.select(); }
+        const firstInput = document.querySelector('#satellitesEditorTable [data-satellite-key]');
+        if (editable && firstInput) {
+          firstInput.focus();
+          if (firstInput.tagName === 'INPUT') { firstInput.select(); }
+        }
       } catch (err) {
         renderSatellitesEditorRows([]);
         setSatellitesEditorMessage('Satellites configuration load failed: ' + err.message);
@@ -8533,10 +9055,12 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         const label = document.createElement('label');
         const safeId = 'radioField_' + key.replace(/[^A-Za-z0-9_-]/g, '_');
         label.setAttribute('for', safeId);
-        label.textContent = key;
+        const isFt736rFrequency = key === 'radio_ft736r_intermediate_frequency_mhz';
+        label.textContent = isFt736rFrequency ? 'FT-736R intermediate frequency (MHz)' : key;
 
         const input = document.createElement('input');
-        input.type = 'text';
+        input.type = isFt736rFrequency ? 'number' : 'text';
+        if (isFt736rFrequency) { input.step = 'any'; }
         input.id = safeId;
         input.dataset.radioKey = key;
         input.value = fieldData[key] ?? '';
@@ -8661,6 +9185,53 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       if (messageElement) { messageElement.textContent = message || ''; }
     }
 
+    function createRadioFieldControl(key, value, explicitOptions = null) {
+      const choices = {
+        mode: ['AM', 'LSB', 'USB', 'FM', 'FMN', 'NFM', 'WFM', 'FM-D', 'C4FM',
+          'CW', 'CWN', 'CWR', 'RTTY', 'RTTYR', 'PKTFM', 'PKTUSB', 'PKTLSB', 'BPSK'],
+        repeater_offset_khz: ['0', '100', '500', '600', '1000', '1600', '2500', '5000', '7600', '10000', '12000', '20000'],
+        repeater_shift: ['0', '+', '-'],
+        ctcss_tone: ['0', '67.0', '69.4', '71.9', '74.4', '77.0', '79.7', '82.5', '85.4',
+          '88.5', '91.5', '94.8', '97.4', '100.0', '103.5', '107.2', '110.9', '114.8',
+          '118.8', '123.0', '127.3', '131.8', '136.5', '141.3', '146.2', '150.0', '151.4',
+          '156.7', '159.8', '162.2', '165.5', '167.9', '171.3', '173.8', '177.3', '179.9',
+          '183.5', '186.2', '189.9', '192.8', '196.6', '199.5', '203.5', '206.5', '210.7',
+          '218.1', '225.7', '229.1', '233.6', '241.8', '250.3', '254.1']
+      };
+      const fieldKey = key.toLowerCase();
+      const choiceKey = ['uplink_mode', 'downlink_mode'].includes(fieldKey) ? 'mode' :
+        fieldKey === 'repeater_offset' ? 'repeater_offset_khz' : fieldKey;
+      const options = explicitOptions || choices[choiceKey];
+      const current = String(value ?? '');
+      const control = document.createElement(options ? 'select' : 'input');
+      if (options) {
+        // Keep existing nonstandard values intact when editing configuration.
+        const values = ['', ...options];
+        if (!values.includes(current)) { values.push(current); }
+        for (const optionValue of values) {
+          const option = document.createElement('option');
+          option.value = optionValue;
+          option.textContent = optionValue === '' ? '(Not set)' : optionValue;
+          if (optionValue !== '') {
+            if (fieldKey === 'bandwidth') {
+              option.textContent = optionValue === '0' ? 'Default (0)' : `${optionValue} Hz`;
+            } else if (fieldKey === 'ctcss_tone') {
+              option.textContent = optionValue === '0' ? 'Off (0)' : `${optionValue} Hz`;
+            } else if (fieldKey.startsWith('repeater_offset')) {
+              option.textContent = optionValue === '0' ? 'No offset (0 kHz)' : `${optionValue} kHz`;
+            } else if (fieldKey === 'repeater_shift') {
+              option.textContent = ({'0': 'Simplex (0)', '+': 'Plus (+)', '-': 'Minus (-)'})[optionValue] || optionValue;
+            }
+          }
+          control.appendChild(option);
+        }
+      } else {
+        control.type = 'text';
+      }
+      control.value = current;
+      return control;
+    }
+
     function renderPresetFields(data) {
       const fieldsElement = document.getElementById('presetFields');
       if (!fieldsElement) { return; }
@@ -8674,8 +9245,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         label.setAttribute('for', safeId);
         label.textContent = key;
 
-        const input = document.createElement('input');
-        input.type = 'text';
+        const input = createRadioFieldControl(key, fieldData[key]);
         input.id = safeId;
         input.dataset.presetKey = key;
         input.value = fieldData[key] ?? '';
@@ -8687,7 +9257,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
     function collectPresetFields() {
       const data = {};
-      document.querySelectorAll('#presetFields input[data-preset-key]').forEach((input) => {
+      document.querySelectorAll('#presetFields [data-preset-key]').forEach((input) => {
         data[input.dataset.presetKey] = input.value;
       });
       return data;
@@ -8779,8 +9349,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
         label.setAttribute('for', safeId);
         label.textContent = key;
 
-        const input = document.createElement('input');
-        input.type = 'text';
+        const input = createRadioFieldControl(key, fieldData[key]);
         input.id = safeId;
         input.dataset.editPresetKey = key;
         input.value = fieldData[key] ?? '';
@@ -8815,7 +9384,7 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
 
     function collectEditPresetFields() {
       const data = {};
-      document.querySelectorAll('#editPresetFields input[data-edit-preset-key]').forEach((input) => {
+      document.querySelectorAll('#editPresetFields [data-edit-preset-key]').forEach((input) => {
         data[input.dataset.editPresetKey] = input.value;
       });
       return data;
@@ -8915,6 +9484,22 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     const recordingsMenuItem = document.getElementById('recordingsMenuItem');
     if (recordingsMenuItem) {
       recordingsMenuItem.addEventListener('click', openRecordingsWindow);
+    }
+    const speechAnnouncementsMenuItem = document.getElementById('speechAnnouncementsMenuItem');
+    if (speechAnnouncementsMenuItem) {
+      speechAnnouncementsMenuItem.addEventListener('click', async () => {
+        if (speechAnnouncementsCommandInFlight) { return; }
+        const enabled = speechAnnouncementsMenuItem.getAttribute('aria-checked') === 'true';
+        speechAnnouncementsCommandInFlight = true;
+        speechAnnouncementsMenuItem.disabled = true;
+        try {
+          await runMenuCommand(enabled ? 'disable_speech_announcements' : 'enable_speech_announcements',
+            'Speech Announcements', false);
+        } finally {
+          speechAnnouncementsCommandInFlight = false;
+          await refreshStatus();
+        }
+      });
     }
     const recordAudioMenuItem = document.getElementById('recordAudioMenuItem');
     if (recordAudioMenuItem) {
@@ -9104,6 +9689,14 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     const configQthMenuItem = document.getElementById('configQthMenuItem');
+    let aprsUploadWindow = null;
+    document.getElementById('configAprsUploadMenuItem').addEventListener('click', () => {
+      if (aprsUploadWindow && !aprsUploadWindow.closed) { aprsUploadWindow.focus(); return; }
+      aprsUploadWindow = window.open('/aprs-upload', 'bqeWispAprsUpload', 'width=760,height=720,resizable=yes,scrollbars=yes');
+      if (!aprsUploadWindow) {
+        document.getElementById('message').textContent = 'The APRS Upload window was blocked. Allow popups for this site and try again.';
+      }
+    });
     if (configQthMenuItem) {
       configQthMenuItem.addEventListener('click', openQthDialog);
     }
@@ -9334,6 +9927,29 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
+    const storageDialog = document.getElementById('storageLocationDialog');
+    const storagePath = document.getElementById('storageLocationPath');
+    const storageMessage = document.getElementById('storageLocationMessage');
+    const storageMenuItem = document.getElementById('storageLocationMenuItem');
+    storageMenuItem.addEventListener('click', () => {
+      storageMessage.textContent = '';
+      if (!storageDialog.open) { storageDialog.showModal(); }
+      storagePath.focus();
+      storagePath.select();
+    });
+    document.getElementById('storageLocationCopy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(storagePath.value);
+        storageMessage.textContent = 'Path copied.';
+      } catch (error) {
+        storagePath.focus();
+        storagePath.select();
+        storageMessage.textContent = 'Press Ctrl+C (or Command+C) to copy the selected path.';
+      }
+    });
+    document.getElementById('storageLocationClose').addEventListener('click', () => storageDialog.close());
+    storageDialog.addEventListener('close', () => storageMenuItem.focus());
+
     const licenseMenuItem = document.getElementById('licenseMenuItem');
     if (licenseMenuItem) {
       licenseMenuItem.addEventListener('click', openLicenseDialog);
@@ -9386,6 +10002,11 @@ INDEX_HTML_TEMPLATE = r"""<!doctype html>
   </script>
 
   <script src="/audio-stream/player.js"></script>
+  <link rel="stylesheet" href="/telemetry-view.css">
+  <script src="/telemetry-charts.js"></script>
+  <script src="/telemetry-view.js"></script>
+  <link rel="stylesheet" href="/aprs-spots.css">
+  <script src="/aprs-spots.js"></script>
 </body>
 </html>
 """
@@ -9403,6 +10024,9 @@ def build_index_html(settings: Optional[WebConsoleSettings] = None) -> str:
         .replace("__BQE_UI_REFRESH_INTERVAL_MS__", str(settings.ui_refresh_interval_ms))
         .replace("__BQE_TEST_PASS_SATELLITES_JSON__", satellites_json)
         .replace("__BQE_UI_THEME__", settings.ui_theme)
+        # SCRIPT_DIR follows the actual source location, including the
+        # standalone launcher's persistent AppData extraction directory.
+        .replace("__BQE_STORAGE_LOCATION__", html.escape(str(SCRIPT_DIR), quote=True))
     )
 
 
@@ -9591,8 +10215,106 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
         path = parsed_url.path
+        if path in ('/admin/settings', '/admin/downloaded-data'):
+            from plugins.settings_backup import serve
+            serve(self, SCRIPT_DIR / 'bqe_config', page=True, downloaded=path.endswith('/downloaded-data'))
+            return
+        if path == '/aprs-spots':
+            from plugins.aprs_spots import build_html
+            self.send_bytes(200, 'text/html; charset=utf-8', build_html(self._ui_theme).encode('utf-8'))
+            return
+        if path == '/aprs-upload':
+            from plugins.bqe_aprs_decoder.igate_settings import build_html
+            self.send_bytes(200, 'text/html; charset=utf-8', build_html(self._ui_theme).encode('utf-8'))
+            return
+        if path in ('/recordings-controls.js', '/recordings-controls.css'):
+            suffix = '.js' if path.endswith('.js') else '.css'
+            self.send_bytes(200, 'application/javascript' if suffix == '.js' else 'text/css',
+                            (SCRIPT_DIR/'plugins'/('recordings_controls' + suffix)).read_bytes())
+            return
+        if path == '/igate-controls.js':
+            self.send_bytes(200, 'application/javascript', (SCRIPT_DIR/'plugins/bqe_aprs_decoder/igate_controls.js').read_bytes())
+            return
+        if path == '/api/aprs-is/settings':
+            from plugins.bqe_aprs_decoder.igate_settings import serve_settings
+            serve_settings(self)
+            return
+        if path == '/speech-controls.js':
+            self.send_bytes(200, 'application/javascript', (SCRIPT_DIR/'plugins'/'speech_controls.js').read_bytes())
+            return
+        if path == '/recording-transcript':
+            query = parse_qs(parsed_url.query)
+            audio = resolve_recording_file(self._recordings_location, query.get('name', [''])[0])
+            try:
+                if audio is None:
+                    raise ValueError('Recording not found')
+                data = read_transcript(audio)
+                if query.get('format', [''])[0] == 'txt':
+                    self.send_bytes(200, 'text/plain; charset=utf-8', transcript_text(data).encode('utf-8'))
+                else:
+                    self.send_bytes(200, 'application/json; charset=utf-8', json.dumps(data).encode('utf-8'))
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                self.send_bytes(404, 'application/json', json.dumps(dict(message=str(exc))).encode('utf-8'))
+            return
+        if path == '/api/recordings/decode':
+            self.send_bytes(200, 'application/json', json.dumps(RECORDING_DECODERS.snapshot()).encode('utf-8'))
+            return
+        if path == '/sstv-enhancement.js':
+            self.send_bytes(200, 'application/javascript; charset=utf-8',
+                            (SCRIPT_DIR/'plugins'/'sstv_enhancement.js').read_bytes())
+            return
+        if path == '/api/sstv/enhancement':
+            self.send_bytes(200, 'application/json; charset=utf-8',
+                            json.dumps(ENHANCEMENT_JOB.snapshot()).encode('utf-8'))
+            return
+        if path in ('/aprs-spots.js', '/aprs-spots.css'):
+            filename = 'aprs_spots' + ('.js' if path.endswith('.js') else '.css')
+            content_type = 'application/javascript' if path.endswith('.js') else 'text/css'
+            self.send_bytes(200, content_type + '; charset=utf-8',
+                            (SCRIPT_DIR / 'plugins' / filename).read_bytes())
+            return
+        if path == '/api/aprs/spots':
+            try:
+                result = APRS_SPOTS_ARCHIVE.snapshot(SCRIPT_DIR)
+                self.send_bytes(200, 'application/json; charset=utf-8', json.dumps(result).encode('utf-8'))
+            except (OSError, ValueError) as exc:
+                self.send_bytes(500, 'application/json; charset=utf-8', json.dumps(
+                    dict(ok=False, message=f'Could not read APRS spots: {exc}')).encode('utf-8'))
+            return
+        if path in ('/telemetry-view.js', '/telemetry-view.css', '/telemetry-charts.js'):
+            filename = 'telemetry_charts.js' if path == '/telemetry-charts.js' else 'telemetry_view' + ('.js' if path.endswith('.js') else '.css')
+            content_type = 'application/javascript' if path.endswith('.js') else 'text/css'
+            self.send_bytes(200, content_type + '; charset=utf-8',
+                            (SCRIPT_DIR / 'plugins' / filename).read_bytes())
+            return
+        if path in ('/api/telemetry/satellites', '/api/telemetry'):
+            try:
+                satellites = telemetry_catalog(SATELLITES_CONFIG_PATH)
+                if path.endswith('/satellites'):
+                    for satellite in satellites:
+                        saved = TELEMETRY_ARCHIVE.snapshot(SCRIPT_DIR, satellite)
+                        satellite['has_recent_telemetry'] = has_recent_telemetry(saved['packets'])
+                        satellite['has_telemetry'] = (True if saved['packets'] else
+                                                      None if saved['warnings'] else False)
+                    result = dict(ok=True, satellites=satellites)
+                else:
+                    selected = parse_qs(parsed_url.query).get('satellite', [''])[0]
+                    satellite = next((s for s in satellites if s['id'] == selected), None)
+                    if satellite is None:
+                        self.send_bytes(404, 'application/json', json.dumps(
+                            dict(ok=False, message='Satellite not found or telemetry is not enabled.')).encode())
+                        return
+                    result = TELEMETRY_ARCHIVE.snapshot(SCRIPT_DIR, satellite)
+                self.send_bytes(200, 'application/json; charset=utf-8', json.dumps(result).encode('utf-8'))
+            except (OSError, ValueError, yaml.YAMLError) as exc:
+                self.send_bytes(500, 'application/json; charset=utf-8', json.dumps(
+                    dict(ok=False, message=f'Could not read saved telemetry: {exc}')).encode('utf-8'))
+            return
         if path == "/audio-stream/pcm":
             AUDIO_STREAM.serve(self)
+            return
+        if path == "/audio-listen/pcm":
+            RADIO_LISTEN.serve(self)
             return
         if path == "/audio-stream/player.js":
             self.send_bytes(200, "application/javascript; charset=utf-8",
@@ -9610,6 +10332,28 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self.send_bytes(200, "text/html; charset=utf-8", gallery_html.encode("utf-8"))
             return
 
+        if path == '/weather':
+            self.send_bytes(200, 'text/html; charset=utf-8',
+                            weather_gallery.gallery_html(SCRIPT_DIR, self._ui_theme).encode('utf-8'))
+            return
+
+        if path in ('/weather-image', '/weather-thumbnail', '/weather-viewer'):
+            name = parse_qs(parsed_url.query).get('name', [''])[0]
+            image_path = weather_gallery.resolve_image(SCRIPT_DIR, name)
+            if image_path is None:
+                self.send_bytes(404, 'text/plain', b'Weather image not found')
+                return
+            try:
+                if path == '/weather-viewer':
+                    self.send_bytes(200, 'text/html; charset=utf-8', weather_gallery.viewer_html(name).encode('utf-8'))
+                elif path == '/weather-thumbnail':
+                    self.send_bytes(200, 'image/jpeg', weather_gallery.thumbnail(image_path))
+                else:
+                    self.send_file_with_range_support(image_path, weather_gallery.EXTENSIONS[image_path.suffix.lower()])
+            except (OSError, ValueError, ImportError):
+                self.send_bytes(503, 'text/plain', b'Image is unavailable or still being written. Refresh to retry.')
+            return
+
         if path == "/sstv-image":
             requested_name = parse_qs(parsed_url.query).get("name", [""])[0]
             image_path = resolve_sstv_image_file(self._sstv_gallery_location, requested_name)
@@ -9617,7 +10361,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self.send_bytes(404, "text/plain; charset=utf-8", b"SSTV image not found")
                 return
             try:
-                self.send_bytes(200, "image/jpeg", image_path.read_bytes())
+                content_type = {'.png': 'image/png', '.bmp': 'image/bmp'}.get(image_path.suffix.lower(), 'image/jpeg')
+                self.send_bytes(200, content_type, image_path.read_bytes())
             except OSError as exc:
                 message = f"Could not read SSTV image: {exc}".encode("utf-8", errors="replace")
                 self.send_bytes(500, "text/plain; charset=utf-8", message)
@@ -9641,7 +10386,7 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self.send_bytes(404, "text/plain; charset=utf-8", b"Recording not found")
                 return
             try:
-                self.send_file_with_range_support(recording_path, "audio/mpeg")
+                self.send_file_with_range_support(recording_path, "audio/wav" if recording_path.suffix.casefold() == ".wav" else "audio/mpeg")
             except OSError as exc:
                 message = f"Could not read recording: {exc}".encode("utf-8", errors="replace")
                 self.send_bytes(500, "text/plain; charset=utf-8", message)
@@ -9656,18 +10401,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             requested_name = parse_qs(parsed_url.query).get("name", [""])[0]
             log_path = resolve_log_file(self._logs_location, requested_name)
             if log_path is None:
-                self.send_bytes(404, "text/plain; charset=utf-8", b"Log file not found")
+                page = build_log_view_html("Log file not found", "This log is no longer available. Return to the log list to choose another file.", self._ui_theme)
+                self.send_bytes(404, "text/html; charset=utf-8", page.encode("utf-8"))
                 return
             try:
                 log_text = log_path.read_bytes().decode("utf-8-sig", errors="replace")
                 self.send_bytes(
                     200,
-                    "text/plain; charset=utf-8",
-                    log_text.encode("utf-8"),
+                    "text/html; charset=utf-8",
+                    build_log_view_html(log_path.name, log_text, self._ui_theme).encode("utf-8"),
                 )
             except OSError as exc:
-                message = f"Could not read log file: {exc}".encode("utf-8", errors="replace")
-                self.send_bytes(500, "text/plain; charset=utf-8", message)
+                page = build_log_view_html(log_path.name, f"Could not read log file: {exc}", self._ui_theme)
+                self.send_bytes(500, "text/html; charset=utf-8", page.encode("utf-8", errors="replace"))
             return
 
         if path == "/api/status":
@@ -9739,6 +10485,72 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path in ('/api/admin/settings', '/api/admin/downloaded-data'):
+            from plugins.settings_backup import serve
+            serve(self, SCRIPT_DIR / 'bqe_config', downloaded=path.endswith('/downloaded-data'))
+            return
+        if path == '/api/aprs-is/settings':
+            from plugins.bqe_aprs_decoder.igate_settings import serve_settings
+            serve_settings(self, write=True)
+            return
+        if path in ('/api/recordings/decode', '/api/recordings/decode/cancel'):
+            origin, host = self.headers.get('Origin'), self.headers.get('Host', '')
+            if (self.headers.get('Content-Type', '').split(';')[0] != 'application/json' or
+                    (origin and origin not in (f'http://{host}', f'https://{host}'))):
+                self.send_bytes(403, 'application/json', b'{"message":"Same-origin JSON request required"}')
+                return
+            try:
+                if not 0 < int(self.headers.get('Content-Length', '0')) <= 65536:
+                    raise ValueError('Invalid request size')
+                payload = self.read_json_payload(65536)
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid JSON')
+                if path.endswith('/cancel'):
+                    result = RECORDING_DECODERS.cancel()
+                else:
+                    names = payload.get('names')
+                    if (not isinstance(names, list) or not 1 <= len(names) <= 100 or
+                            not all(isinstance(name, str) for name in names) or len(set(names)) != len(names)):
+                        raise ValueError('Select 1–100 different recordings')
+                    paths = [resolve_recording_file(self._recordings_location, name) for name in names]
+                    if any(path is None for path in paths):
+                        raise ValueError('A selected recording is missing or outside the recordings folder')
+                    result = RECORDING_DECODERS.start(SCRIPT_DIR, payload.get('decoder'), paths,
+                                resolve_sstv_images_directory(self._sstv_gallery_location), language=payload.get('language', 'en'))
+                self.send_bytes(200, 'application/json', json.dumps(result).encode('utf-8'))
+            except (OSError, ValueError, TypeError) as exc:
+                self.send_bytes(400, 'application/json', json.dumps(dict(message=str(exc))).encode('utf-8'))
+            return
+        if path in ('/api/sstv/enhancement', '/api/sstv/enhancement/cancel', '/api/sstv/delete', '/api/weather/delete'):
+            origin = self.headers.get('Origin')
+            host = self.headers.get('Host', '')
+            if (self.headers.get('Content-Type', '').split(';')[0] != 'application/json' or
+                    (origin and origin not in (f'http://{host}', f'https://{host}'))):
+                self.send_bytes(403, 'application/json', b'{"message":"Same-origin JSON request required"}')
+                return
+            try:
+                limit = 1048576 if path == '/api/sstv/delete' else 16384
+                if not 0 < int(self.headers.get('Content-Length', '0')) <= limit:
+                    raise ValueError('Invalid request size')
+                payload = self.read_json_payload(limit)
+                if not isinstance(payload, dict):
+                    raise ValueError('Invalid JSON')
+                if path == '/api/weather/delete':
+                    from plugins.weather_gallery import delete_pass_images
+                    result = delete_pass_images(SCRIPT_DIR, payload.get('passes'))
+                elif path == '/api/sstv/delete':
+                    result = delete_sstv_images(self._sstv_gallery_location, payload.get('names'))
+                elif path.endswith('/cancel'):
+                    result = ENHANCEMENT_JOB.cancel()
+                else:
+                    directory = resolve_sstv_images_directory(self._sstv_gallery_location)
+                    if directory is None:
+                        raise ValueError('SSTV gallery is not configured')
+                    result = ENHANCEMENT_JOB.start(SCRIPT_DIR, directory, payload.get('names'))
+                self.send_bytes(200, 'application/json; charset=utf-8', json.dumps(result).encode('utf-8'))
+            except (OSError, ValueError, TypeError) as exc:
+                self.send_bytes(400, 'application/json; charset=utf-8', json.dumps(dict(message=str(exc))).encode('utf-8'))
+            return
 
         # Configuration files may be viewed remotely, but they may only be
         # changed by a browser connected through localhost/127.0.0.1.  Applying

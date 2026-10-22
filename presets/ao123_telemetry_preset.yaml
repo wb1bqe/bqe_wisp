@@ -1,0 +1,12 @@
+nickname: ao123-telemetry
+channel_name: AO-123 Telemetry
+frequency_hz: 435400000
+mode: BPSK
+bandwidth: 16000
+receive_sdr: true
+sdr_only: true
+sdr:
+  bandwidth: 16000
+decode_ao123_telemetry: true
+record_audio: true
+program_to_run_while_waiting: ''

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BQE WISP — Settings backup</title>
+<style>
+body{font:16px system-ui,sans-serif;background:#eef2f6;color:#182b40;margin:0;padding:24px}
+main{max-width:800px;margin:auto;background:white;padding:24px;border:1px solid #bdcbd8;border-radius:12px}
+h1{margin-top:0;font-size:1.6rem}button,input,select{font:inherit;padding:9px;border:1px solid #8a9caf;border-radius:5px}
+button{cursor:pointer;background:#edf3fa;color:#182b40}button:disabled{opacity:.5;cursor:default}
+.bar{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap}input{flex:1;min-width:180px}
+#entries{height:300px;overflow:auto;border:1px solid #bdcbd8;border-radius:6px}
+#entries button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #e4eaf0;border-radius:0;background:white}
+#entries button:hover,#entries button[aria-pressed=true]{background:#dcecff}
+#run{background:#174f80;color:white}#status{white-space:pre-wrap;overflow-wrap:anywhere;min-height:2em}
+#selection{overflow-wrap:anywhere}footer{display:flex;gap:10px;margin-top:20px}
+</style>
+<main>
+<h1 id="title">Settings backup</h1>
+<p id="instructions"></p>
+<p>Browse folders on the computer running BQE WISP.</p>
+<p id="backupNote">Backups include your saved APRS-IS credential when present. The ZIP is not encrypted.</p>
+<label for="path">Folder</label>
+<form id="location" class="bar"><input id="path" autocomplete="off"><button>Go</button></form>
+<div class="bar"><button id="up">↑ Parent folder</button><button id="home">Home</button>
+<select id="drives" aria-label="Drive"><option value="">Choose a drive…</option></select></div>
+<div id="entries" aria-label="Folders and backup ZIPs"></div>
+<p id="selection"></p>
+<p id="status" role="status" aria-live="polite"></p>
+<footer><button id="run" disabled>Continue</button><button id="close">Close</button></footer>
+</main>
+<script>
+const mode = new URLSearchParams(location.search).get('mode') === 'restore' ? 'restore' : 'backup';
+const downloaded = location.pathname === '/admin/downloaded-data';
+const el = id => document.getElementById(id);
+let current = '', parent = '', selected = '', busy = false;
+el('title').textContent = mode === 'backup' ? 'Backup settings' : 'Restore settings';
+el('instructions').textContent = mode === 'backup'
+  ? 'Choose a destination folder. All files and subfolders in bqe_config, plus your saved APRS-IS settings, will be saved in a timestamped ZIP.'
+  : 'Choose a backup ZIP. Matching files in bqe_config and the saved APRS-IS settings will be overwritten; other files will be kept.';
+el('run').textContent = mode === 'backup' ? 'Back up to this folder' : 'Restore selected ZIP';
+if (downloaded) {
+  el('title').textContent = mode === 'backup' ? 'Backup Downloaded Data' : 'Restore downloaded data';
+  el('instructions').textContent = mode === 'backup'
+    ? 'Choose a destination folder for a timestamped ZIP of SSTV galleries, decoder decoded folders, pass recordings (including the configured recording folder and transcripts), standard SDR recordings, and APRS packets, map history and upload receipts.'
+    : 'Choose a downloaded-data backup ZIP. Matching images, decoded data, recordings, transcripts and APRS upload receipts will be overwritten; other files will be kept. Custom galleries and pass recordings restore to the current configured locations.';
+  el('backupNote').textContent = 'LRPT weather downloads are excluded. Stop reception, recording, decoding and transcription before backup or restore. Supports up to 64 GB / 250,000 entries.';
+}
+document.title = 'BQE WISP — ' + el('title').textContent;
+async function request(action, path) {
+  const response = await fetch(downloaded ? '/api/admin/downloaded-data' : '/api/admin/settings', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,path})});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || 'Request failed.');
+  return result;
+}
+function lock(value) {
+  busy = value;
+  document.querySelectorAll('button,input,select').forEach(control => control.disabled = value);
+  el('run').disabled = value || !(mode === 'backup' ? current : selected);
+}
+async function browse(path) {
+  if (busy) return;
+  lock(true); el('status').textContent = 'Opening folder…';
+  try {
+    const result = await request('browse', path);
+    current = result.path; parent = result.parent; selected = '';
+    el('path').value = current; el('entries').replaceChildren();
+    el('selection').textContent = mode === 'backup' ? 'Destination: ' + current : 'Select a ZIP below.';
+    for (const item of result.entries) {
+      if (!item.directory && mode === 'backup') continue;
+      const button = document.createElement('button');
+      button.textContent = (item.directory ? '📁 ' : '📦 ') + item.name;
+      button.onclick = () => {
+        if (item.directory) { browse(item.path); return; }
+        selected = item.path;
+        el('entries').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed','false'));
+        button.setAttribute('aria-pressed','true');
+        el('selection').textContent = 'Backup: ' + selected;
+        el('run').disabled = false;
+      };
+      el('entries').append(button);
+    }
+    el('drives').replaceChildren(new Option('Choose a drive…',''));
+    result.drives.forEach(drive => el('drives').add(new Option(drive,drive)));
+    el('status').textContent = el('entries').children.length ? '' : 'No matching items in this folder.';
+  } catch(error) { el('status').textContent = error.message; }
+  finally { lock(false); }
+}
+el('location').onsubmit = event => {event.preventDefault(); browse(el('path').value);};
+el('up').onclick = () => browse(parent);
+el('home').onclick = () => browse('');
+el('drives').onchange = () => {if (el('drives').value) browse(el('drives').value);};
+el('close').onclick = () => window.close();
+el('run').onclick = async () => {
+  if (busy) return;
+  if (mode === 'restore' && !confirm('Restore ' + selected + '?\nMatching ' +
+      (downloaded ? 'downloaded data' : 'configuration') + ' files will be overwritten.')) return;
+  lock(true); el('status').textContent = mode === 'backup' ? 'Creating backup…' : 'Validating and restoring backup…';
+  try { el('status').textContent = (await request(mode, mode === 'backup' ? current : selected)).message; }
+  catch(error) { el('status').textContent = error.message; }
+  finally {lock(false);}
+};
+browse('');
+</script>
+</html>

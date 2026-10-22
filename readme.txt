@@ -42,3 +42,37 @@ To run:
    		Once BQE Wisp has been started,  the UI can be viewed at  http://localhost:8028
 
 
+
+Settings backup and restore
+---------------------------
+Use Admin > Backup settings from the localhost web console. Browse to a
+destination folder on the BQE WISP computer and save a timestamped ZIP.
+The backup includes every file/subfolder in bqe_config and, when present,
+plugins/bqe_aprs_decoder/aprs-is.private.json (your APRS-IS credential/settings).
+The ZIP is not encrypted.
+Use Admin > Restore settings to browse to a backup ZIP and confirm restoration.
+Matching files are overwritten; files absent from the backup are kept. Older
+config-only backups leave the existing APRS-IS credential unchanged. Restart
+BQE WISP after restoring to apply all settings. ZIPs are validated before any
+settings are changed; supported restores are up to 512 MB and 10,000 entries.
+
+Downloaded data backup and restore
+----------------------------------
+Admin > Backup Downloaded Data saves a timestamped ZIP to a browsed folder.
+It includes sstv_gallery, a separately configured SSTV gallery when applicable,
+the top-level decoded folder (if present), and plugins/*/decoded, including
+APRS packet logs/map history and all nested files, sidecars and empty folders.
+Also included: plugins/bqe_sound_recorder/recordings, its separately configured
+recordings folder, plugins/bqe_sdr/recordings (WAV/IQ files and metadata), and
+plugins/bqe_aprs_decoder/upload_receipts. Speech transcript JSON/text sidecars
+are included alongside the audio. Model downloads, generated voice caches and
+temporary .uploads folders are not included. Custom standalone SDR --output
+folders outside plugins/bqe_sdr/recordings require a separate backup.
+LRPT weather data is excluded, including everything in bqe_lrpt_decoder.
+APRS credentials remain in the separate settings backup.
+Admin > Restore downloaded data validates the ZIP and overwrites matching
+files, preserving other files. Custom gallery and pass-recording data use the
+current configured locations. Stop reception, recording, decoding and
+transcription before backup or restore; refresh galleries, recordings and
+APRS/telemetry views afterward. Limits: 64 GB / 250,000 entries.
+Settings and downloaded-data backups must be restored using their respective menus.

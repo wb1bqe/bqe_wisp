@@ -13,21 +13,28 @@ from .protocol import Framer
 
 class AudioDecoder:
     def __init__(self, rate, emit, report=lambda **fields: None, preview=lambda image: None,
-                 baud=9600, packet_sink=lambda packet: None):
+                 baud=9600, packet_sink=lambda packet: None, frame_sizes=(74,),
+                 image_receiver=ImageReceiver, label='RS61'):
         if baud != 9600 or rate < 3 * baud:
             raise ValueError('RS61 requires 9600 baud and an audio rate of at least 28,800 Hz')
         self.rate, self.baud = rate, baud
         self.report, self.packet_sink = report, packet_sink
-        self.images = ImageReceiver(emit, report, preview)
+        self.label = label
+        self.images = image_receiver(emit, report, preview)
         self.samples = self.packets = self.duplicates = 0
         self.recent = deque(maxlen=64)
-        self.framers = [Framer(self.packet) for _ in range(4)]
+        self.framers = [Framer(self.packet, size) for _ in range(4) for size in frame_sizes]
         self.taps = firwin(max(17, int(6*rate/baud) | 1), min(.75*baud, rate*.45), fs=rate)
         self.filter_state = np.zeros(len(self.taps)-1)
         self.dc_state = np.zeros(1)
         self.pole = math.exp(-2*math.pi*5/rate)
-        self.clocks = [SymbolClock(rate, baud, phase/4, framer.feed, (len(self.taps)-1)/2)
-                       for phase, framer in enumerate(self.framers)]
+        self.clocks = []
+        for phase in range(4):
+            framers = self.framers[phase*len(frame_sizes):(phase+1)*len(frame_sizes)]
+            def feed(value, when, framers=framers):
+                for framer in framers:
+                    framer.feed(value, when)
+            self.clocks.append(SymbolClock(rate, baud, phase/4, feed, (len(self.taps)-1)/2))
 
     def packet(self, payload, when):
         if any(data == payload and abs(when-time) < .01 for data, time in self.recent):
@@ -38,7 +45,7 @@ class AudioDecoder:
         self.packet_sink(payload)
         self.images.packet(payload, when)
         if not self.images.image_packets:
-            self.report(reception='Valid Geoscan packets received; waiting for RS61 image fragments')
+            self.report(reception=f'Valid Geoscan packets received; waiting for {self.label} image fragments')
         self.report(packets=self.packets, bad_crc=sum(f.bad_crc for f in self.framers),
                     sync_candidates=sum(f.syncs for f in self.framers),
                     duplicate_candidates=self.duplicates)

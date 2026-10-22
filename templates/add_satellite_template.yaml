@@ -13,9 +13,13 @@
     enable_antenna_tracking: False   # 2m antennas are not currently mounted
     enable_tuning: True
     priority: '3'
+    sdr_required: false # Set true for telemetry decoders or LRPT; skipped on non-SDR stations.
     auto_schedule: False
+    record_audio: false # Audio from the configured conventional radio or SDR
     program_to_run_during_pass:
     decode_sstv_images: false  # true uses radio_soundcard from my_rig.yaml
     decode_telemetry: false    # true uses radio_soundcard from my_rig.yaml
+    decode_aprs: false         # APRS via radio_soundcard or SDR audio
+    aprs_bauds: [1200]         # Optional: [1200, 9600]; 9600 requires flat DATA audio
     decode_lrpt_images: false # Meteor LRPT: full SDR IQ, SatDump images after the pass
     decode_ssdv_images: false # RS61 Geoscan images; uses radio_soundcard.

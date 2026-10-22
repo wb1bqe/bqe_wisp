@@ -1,0 +1,13 @@
+<details id="igateSettings" data-endpoint="__ENDPOINT__" style="margin:18px 0;padding:16px;border:1px solid #70889e;border-radius:8px">
+<summary>APRS-IS upload settings</summary>
+<p>Forward newly received radio packets to APRS-IS. File decoding and SDR demo/replay never upload. No radio transmission is performed. Your QTH position is sent after login and every 30 minutes while live uploading is enabled.</p>
+<p>IGate callsign from my_qth.yaml: <strong id="igateCall">Loading…</strong></p>
+<label><input type="checkbox" id="igateEnabled"> Enable live APRS-IS uploads</label><br>
+<label>Server <input id="igateHost" value="rotate.aprs2.net" autocomplete="off"></label>
+<label>Port <input id="igatePort" type="number" value="14580" min="1" max="65535"></label><br>
+<label>APRS-IS passcode <input id="igatePasscode" type="password" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="Enter APRS-IS passcode"></label>
+<label><input id="igateClear" type="checkbox"> Clear saved passcode</label>
+<p><small>This is the numeric APRS-IS passcode, not your aprs.fi password. Leave blank to keep a saved passcode. It is stored locally; the browser never receives the saved value.</small></p>
+<button type="button" id="igateSave">Save upload settings</button>
+<p id="igateSaveStatus" role="status"></p><p id="igateConnection" role="status"></p>
+</details>

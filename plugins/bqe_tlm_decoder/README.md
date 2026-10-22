@@ -58,7 +58,72 @@ or discriminator audio output. Wide RF bandwidth alone does not make an ordinary
 fewer than three samples/symbol are skipped and reported. MP3 compression may
 erase data; WAV/FLAC are preferable for future recordings.
 
+## UTMN-2 / RS27S
+
+UTMN-2 (NORAD 57203) uses the supported USP framing. Its existing `utmn-2`
+entry in `bqe_config/satellites.yaml` enables this plugin with
+`decode_telemetry: true`. Auto mode tries 1200/2400/4800/9600 baud, covering
+the published 2400/4800/9600-baud modes without a separate decoder plugin.
+The mission page lists 436.125 MHz and notes that 4800 baud is commonly used:
+https://spacepi.space/satellites/utmn-2/ . The gr-satellites framing definition
+also confirms USP, but lists the older 435.485 MHz frequency:
+https://github.com/daniestevez/gr-satellites/blob/main/python/satyaml/UTMN-2.yml .
+
+The entry retains SSTV decoding for image events, opens squelch, and records
+pass audio for replay. A per-pass SDR audio_gain of 0.15 avoids the severe
+recording clipping observed with the station gain of 2.25 (75.3% of samples
+in the 2026-09-29 pass recording). Other satellites retain their own settings.
+It automatically uses the configured conventional-radio
+input or SDR audio bridge. Received AX.25 source addresses identify RS27S;
+supported SPUTNIX records are decoded into fields and unknown records remain
+raw. This is protocol compatibility, not a claim that every UTMN-2 payload
+record has an engineering-unit parser or that live reception is guaranteed.
+
+## QMR-KWT-2 / RS95S
+
+QMR-KWT-2 / RS95S (NORAD 67291) is also supported by the existing USP
+decoder. The `kwt-2` entry uses 436.950 MHz FM, keeps telemetry and SSTV
+decoding enabled, opens squelch, records pass audio, and sets the per-pass
+SDR audio gain to 0.15. Auto mode covers the published baud-rate ambiguity
+(the SatNOGS transmitter label says 2k4, while its baud field says 9600).
+The live pass checked on 2026-09-29 had excessive SDR audio gain (2.25);
+reducing it does not by itself prove successful packet reception.
+References: https://db.satnogs.org/satellite/67291/ and
+https://www.orbital-space.com/dashboard.html . Unknown telemetry records
+remain raw, as for other USP satellites.
+
 ## Results and telemetry
+
+### LUCA-1 / RS90S
+
+LUCA-1 (NORAD 67287) uses the existing USP decoder; no separate plugin is
+needed. The `luca-1` entry in `bqe_config/satellites.yaml` receives at
+437.180 MHz FM with 25 kHz bandwidth, open squelch, pass recording, and both
+`decode_telemetry: true` and `decode_sstv_images: true`. A single entry runs
+both decoders during the same pass and avoids duplicate catalog entries.
+Automatic scheduling, tuning and tracking are enabled in the station config;
+the release-default entry leaves those controls and recording disabled.
+
+gr-satellites documents 2400-baud USP on this downlink. The decoder's automatic
+1200/2400/4800/9600-baud search also covers the higher rates listed by reception
+databases. IARU coordination includes 436.150 MHz as a spare downlink, not an
+uplink. The 19200-baud mode proposed in the coordination application is not
+supported by this decoder. No claim is made that all proposed modes are on air.
+
+SSTV uses the existing SSTV decoder and its automatic mode detection when
+images are transmitted; enabling reception does not command the satellite to
+send pictures. Use the SDR audio bridge or flat discriminator/DATA audio for
+telemetry. Known common SPUTNIX records are parsed; unknown records remain raw.
+LUCA-specific particle sensor layouts and live LUCA-1 reception are unverified.
+After restarting BQE, update Keps, wait for completion, and regenerate the
+schedule to include LUCA-1.
+
+References:
+- https://gr-satellites.readthedocs.io/en/latest/supported_satellites.html#luca
+- https://iaru.amsat-uk.org/finished_detail.php?serialnum=1092
+- https://en.sonik.space/satellites/KGYQ-5715-2443-6319-9345/
+
+### Output records
 
 Each session writes unique `.jsonl` and `.kiss` files under `decoded/`, flushing
 every validated packet. The page shows the newest 200 packets. JSON includes

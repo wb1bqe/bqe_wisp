@@ -2,6 +2,12 @@ program_settings:
 - common:
     python_path: python
 - bqe_wisp:
+    # Piper Cori British female voice on default system playback; restart BQE after changing.
+    pass_announcements_enabled: true
+    # Try Windows British female speech if Piper fails; restart after changing.
+    pass_announcements_windows_fallback: true
+    # Maximum cached Piper messages; 0 disables caching. Restart after changing.
+    pass_announcements_cache_size: 20
     horizon_threshold_elevation: 0.1
     ui_port: 8028
     ui_refresh_interval: 5 seconds
@@ -9,7 +15,7 @@ program_settings:
     scheduler_sleep_interval: 30
     idle_tuning_delay_seconds: 3
     web_command_timeout_seconds: 300
-    sstv_gallery_location: c:/ham/mmsstv/history
+    sstv_gallery_location: sstv_gallery
 - bqe_set_radio_from_yaml:
     default_squelch_level_fm: 0.25
     default_squelch_level_ssb: 0

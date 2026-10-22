@@ -96,6 +96,33 @@ timeout and release the SDR before processing, allowing subsequent passes.
 
 ## Controls, gallery and replay
 
+Decoded swaths are automatically oriented with north toward the top. The decoder
+uses the IQ capture time and a saved copy of the satellite's local TLE to detect
+pass direction. SatDump stores lines chronologically: south-to-north (ascending)
+passes need a 180-degree rotation; north-to-south (descending) passes do not.
+This is a lossless pixel rotation, not a map reprojection: the track may still
+be tilted relative to true north. Already-projected SatDump products are excluded.
+
+Rotated PNG views are saved in `products/north_up/` and displayed by both galleries.
+The original SatDump images and geolocation metadata remain intact. `job.json`
+records the direction, rotation, replacements, and any problems. The decoder
+keeps images even when orientation cannot be determined (missing capture time,
+missing/mismatched TLE, elements over 14 days old, or a pass crossing a polar
+turning point). It does not guess from cloud patterns or discard the decode.
+
+TLEs come from the tracker's configured `tle_file` (normally `keps.txt`);
+standalone/idle use can override `lrpt.tle_file`. New SigMF captures include
+`bqe:orbit` so replay uses the original elements. Older captures use the local
+TLE only when it is sufficiently close to the recorded time. Restart BQE to
+load the updated receiver code; the launchers install SGP4 and Pillow as needed.
+
+The main BQE web console also provides **View → Weather**, showing all saved
+LRPT PNG/JPEG products grouped by pass capture time (UTC), newest first.
+Click a thumbnail to open an independent window at full resolution (100%);
+scroll to explore large images. Use **Refresh** to include newly decoded passes.
+This gallery reads the default recordings folder directly; the standalone
+LRPT server does not need to be running.
+
 The launcher opens `http://127.0.0.1:8773`. Select the satellite/frequency/rate,
 click **Start IQ capture**, and **Stop & decode** when finished. The gallery
 updates while SatDump runs. A clean decoder exit with no images is labelled

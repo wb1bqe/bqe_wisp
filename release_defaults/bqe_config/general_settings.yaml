@@ -1,0 +1,69 @@
+# Neutral beta defaults. Configure your station before enabling passes.
+program_settings:
+- common:
+    python_path: python
+- bqe_wisp:
+    # Piper Cori British female voice on default system playback; restart BQE after changing.
+    pass_announcements_enabled: true
+    # Try Windows British female speech if Piper fails; restart after changing.
+    pass_announcements_windows_fallback: true
+    # Maximum cached Piper messages; 0 disables caching. Restart after changing.
+    pass_announcements_cache_size: 20
+    horizon_threshold_elevation: 0.1
+    ui_port: 8028
+    ui_refresh_interval: 5 seconds
+    ui_theme: modern
+    scheduler_sleep_interval: 30
+    idle_tuning_delay_seconds: 3
+    web_command_timeout_seconds: 300
+    sstv_gallery_location: images
+- bqe_set_radio_from_yaml:
+    default_squelch_level_fm: 0.25
+    default_squelch_level_ssb: 0
+    default_squelch_level_cw: 0
+    default_agc_fm: fast
+    default_agc_ssb: medium
+    default_agc_cw: slow
+    default_bandwidth_fm: 15000
+    default_bandwidth_ssb: 3000
+    default_bandwidth_cw: 1500
+- bqe_wisp_web:
+    placeholder_key: ''
+- bqe_schedule_passes:
+    parallel_pass_generation: true
+    parallel_pass_workers: 4
+- bqe_track_continuously:
+    fdt_recalculation_interval: 10
+    high_pass_elevation: 65
+    horizon_threshold_elevation: 0.1
+    sleep_interval: 10
+    sleep_interval_high_elevation: 3
+    tle_file: keps.txt
+    satellite_config_file: bqe_config/satellites.yaml
+    antenna_request_timeout: 5
+    satellite_config: bqe_config/satellites.yaml
+    qth_config: bqe_config/my_qth.yaml
+    radio_config: bqe_config/my_rig.yaml
+    default_rigctld_pid_file: logs/rigctld.pid
+    default_pass_program_pid_file: logs/pass_program.pid
+    default_enable_antenna_tracking: false
+    default_enable_tuning: false
+    initial_antenna: 1
+    default_antenna: 1
+    antenna_switch_url: null
+    antenna_request_timeout_seconds: 5
+    antenna_selection_rules: []
+    default_antenna_description: ''
+    process_stop_timeout_seconds: 5.0
+    test_pass_azimuth: 45
+    test_pass_elevation: 45
+    test_pass_doppler: 3000
+- plugins:
+    bqe_sound_recorder:
+      recordings: plugins/bqe_sound_recorder/recordings
+- third_party:
+    rigctld_port: 4532
+    rigctl_path: rigctl
+    rigctld_path: rigctld
+    rigctld_startup_delay_seconds: 2
+    rigctld_startup_output_timeout_seconds: 2

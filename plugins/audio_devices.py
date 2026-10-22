@@ -4,6 +4,21 @@ import ctypes
 import queue
 import sys
 
+
+class _LazySoundCard:
+    """Linux SoundCard connects to PulseAudio on import; defer until capture."""
+    def __getattr__(self, name):
+        import soundcard
+        return getattr(soundcard, name)
+
+
+def soundcard_backend():
+    if sys.platform == 'win32':
+        # WASAPI must initialize on the main thread before capture workers start.
+        import soundcard
+        return soundcard
+    return _LazySoundCard()
+
 # PortAudio initializes its Windows host APIs on import; load before capture
 # workers start, just as the services do for SoundCard.
 try:

@@ -66,8 +66,10 @@ class Assembly:
 
 
 class ImageReceiver:
-    def __init__(self, emit, report, preview):
+    def __init__(self, emit, report, preview, fragment_parser=image_fragment,
+                 mode='RS61_GEOSCAN', label='RS61'):
         self.emit, self.report, self.preview = emit, report, preview
+        self.fragment_parser, self.mode, self.label = fragment_parser, mode, label
         self.images = OrderedDict()
         self.image_packets = 0
         self.rejected = 0
@@ -78,13 +80,14 @@ class ImageReceiver:
         image = assembly.render()
         if image is None:
             return
+        image.info['ssdv_mode'] = self.mode
         self.preview(image)
         if image.info['ssdv_complete'] or final:
             self.emit(image, assembly.started)
             assembly.saved = True
 
     def packet(self, packet, when):
-        fragment = image_fragment(packet)
+        fragment = self.fragment_parser(packet)
         if fragment is None:
             return
         number, offset, data = fragment
@@ -106,11 +109,11 @@ class ImageReceiver:
         if not current.add(offset, data):
             return
         self.image_packets += 1
-        self.report(mode='RS61_GEOSCAN', file_id=number, image_packets=self.image_packets,
+        self.report(mode=self.mode, file_id=number, image_packets=self.image_packets,
                     received_bytes=current.received, missing_bytes=len(current.data)-current.received,
                     has_start=current.data[:2] == b'\xff\xd8',
                     conflicting_packets=current.conflicts,
-                    reception=f'Receiving RS61 image {number} · {current.packets} fragments')
+                    reception=f'Receiving {self.label} image {number} · {current.packets} fragments')
         if when - current.last_preview >= 2 or b'\xff\xd9' in current.data[max(0, offset-1):offset+len(data)+1]:
             self._publish(current)
             current.last_preview = when

@@ -29,6 +29,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(command[command.index('--device')+1], 'USB Audio Codec')
             self.assertIn('--managed', command)
             self.assertIn('--open-browser', command)
+            self.assertIn('--combine-fragments', command)
             self.assertEqual(popen.call_args.kwargs['stdin'], subprocess.PIPE)
             receiver.stop()
             child.stdin.close.assert_called_once()
@@ -109,10 +110,14 @@ class IntegrationTests(unittest.TestCase):
         names = {'start_idle_wait_program', 'stop_idle_wait_program'}
         nodes = [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
         namespace = dict(os=os, SCRIPT_DIR=str(ROOT), yaml=Mock(), SHUTDOWN_EVENT=threading.Event(),
+                         PRESET_LIFECYCLE_LOCK=threading.RLock(),
+                         satellite_pass_is_active=Mock(return_value=False),
                          CURRENT_IDLE_PROCESS=None, IDLE_WAIT_PROGRAM_PID_FILE='unused',
                          load_preset_config_by_nickname=Mock(return_value={'decode_sstv_images':'USB Audio Codec'}))
         exec(compile(ast.Module(body=nodes,type_ignores=[]), '<preset functions>', 'exec'), namespace)
-        with patch.object(integration, 'SSTV_RECEIVER') as receiver:
+        with patch.object(integration, 'SSTV_RECEIVER') as receiver, \
+                patch('plugins.bqe_sdr.integration.SDR_RECEIVER'), \
+                patch('plugins.bqe_lrpt_decoder.integration.LRPT_RECEIVER'):
             self.assertIsNone(namespace['start_idle_wait_program']('hf_sstv'))
             receiver.start.assert_called_once_with({'decode_sstv_images':'USB Audio Codec'},'hf_sstv')
             namespace['stop_idle_wait_program']()

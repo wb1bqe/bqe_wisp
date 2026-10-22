@@ -68,6 +68,7 @@ class SourceTests(unittest.TestCase):
                      'reset_buffer','cancel_async','close'):
             getattr(lib,'rtlsdr_'+name).return_value=0
         lib.rtlsdr_get_freq_correction.return_value=0
+        lib.rtlsdr_get_tuner_gains.return_value=1
         stopped=threading.Event()
         lib.rtlsdr_cancel_async.side_effect=lambda handle: stopped.set() or 0
         raw=bytes([127,128])*BLOCK

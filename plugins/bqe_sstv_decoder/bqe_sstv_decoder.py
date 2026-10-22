@@ -16,7 +16,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent.parent))
 from plugins.bqe_sstv_decoder.service import Session, devices, gallery_settings
-from plugins.decoder_http import DecoderServer
+from plugins.decoder_http import DecoderServer, decoder_page
 
 
 def handler(session, defaults):
@@ -45,7 +45,7 @@ def handler(session, defaults):
                 return
             try:
                 if self.path == '/':
-                    self.reply(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8')
+                    self.reply(200, decoder_page((ROOT / 'index.html')), 'text/html; charset=utf-8')
                 elif self.path == '/status':
                     self.reply(200, session.snapshot())
                 elif self.path == '/devices':
@@ -61,7 +61,8 @@ def handler(session, defaults):
                     if name not in {r['filename'] for r in session.snapshot()['recent']}:
                         self.reply(404, {'error': 'Image not found'})
                     else:
-                        self.reply(200, (session.output / name).read_bytes(), 'image/jpeg')
+                        self.reply(200, (session.output / name).read_bytes(),
+                                   'image/png' if name.lower().endswith('.png') else 'image/jpeg')
                 else:
                     self.reply(404, {'error': 'Not found'})
             except Exception as exc:
@@ -125,6 +126,7 @@ def handler(session, defaults):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--combine-fragments', action='store_true', help='Save an extra confidence-weighted composite when repeated images match')
     parser.add_argument('--file', type=Path, help='Decode an MP3/WAV recording')
     parser.add_argument('--device', '--input-device', help='SoundCard input or loopback device ID/name')
     parser.add_argument('--list-devices', action='store_true')
@@ -168,6 +170,12 @@ def main():
         if args.open_browser:
             import webbrowser
             webbrowser.open(url)
+    # Load native decoder dependencies before watch_owner blocks on stdin.
+    # On Windows, importing SciPy/BLAS after that blocking read can stall
+    # startup and all HTTP requests until the owner pipe closes.
+    if args.managed and not args.idle:
+        from plugins.bqe_sstv_decoder import decoder
+
     owner_closed = threading.Event()
     if args.managed:
         def watch_owner():

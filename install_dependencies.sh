@@ -25,10 +25,13 @@ $SUDO apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
-    libhamlib-utils
+    libhamlib-utils \
+    build-essential python3-dev libffi-dev pkg-config \
+    libpulse0 libsndfile1 libfftw3-dev libcodec2-dev \
+    librtlsdr0 rtl-sdr
 
-if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,9) else 1)'; then
-    echo "ERROR: BQE WISP requires Python 3.9 or newer."
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)'; then
+    echo "ERROR: BQE WISP requires Python 3.10 or newer (3.13 recommended)."
     python3 --version || true
     exit 1
 fi
@@ -38,22 +41,34 @@ if [[ ! -f "$SCRIPT_DIR/requirements.txt" ]]; then
     exit 1
 fi
 
+echo "Checking the dependency file list..."
+python3 "$SCRIPT_DIR/check_dependencies.py" --files-only
+
 echo "Creating or updating the virtual environment..."
 if [[ ! -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
     python3 -m venv "$SCRIPT_DIR/.venv"
 fi
 
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/.venv/bin/activate"
+PYTHON="$SCRIPT_DIR/.venv/bin/python"
+if ! "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)'; then
+    echo "ERROR: Existing .venv is too old. Rename it and rerun this installer."
+    exit 1
+fi
 
 echo "Updating pip, setuptools, and wheel..."
-python -m pip install --upgrade pip setuptools wheel
+"$PYTHON" -m pip install --upgrade pip setuptools wheel
 
 echo "Installing BQE WISP Python libraries..."
-python -m pip install -r "$SCRIPT_DIR/requirements.txt"
+"$PYTHON" -m pip install --only-binary=sstv -r "$SCRIPT_DIR/requirements.txt"
 
-echo "Verifying Python imports..."
-python -c "import numpy, requests, skyfield, yaml; print('Python dependency check passed.')"
+echo "Building the bundled SSDV and HamDRM engines for this machine..."
+# Force rebuilding: a copied release folder may contain foreign-architecture objects.
+python3 "$SCRIPT_DIR/plugins/bqe_ssdv_decoder/vendor/ssdv/build.py" --target linux
+sh "$SCRIPT_DIR/plugins/bqe_hf_image_decoder/native/rxamadrm/build.sh"
+
+echo "Verifying Python dependencies and reporting native components..."
+"$PYTHON" -m pip check
+"$PYTHON" "$SCRIPT_DIR/check_dependencies.py"
 
 echo "Checking Hamlib command-line programs..."
 RIGCTL_PATH="$(command -v rigctl || true)"
@@ -80,10 +95,12 @@ else
 fi
 
 echo
-echo "Installation complete."
+echo "Python and bundled native builds complete. Review component warnings above."
+echo "SatDump is installed separately; see DEPENDENCIES.md."
+echo "Run BQE as your regular desktop user with PulseAudio or PipeWire-Pulse available."
 echo
 echo "To activate this environment later:"
 echo "    source \"$SCRIPT_DIR/.venv/bin/activate\""
 echo
-echo "To start BQE WISP after the project files have their normal names:"
+echo "To start BQE WISP:"
 echo "    \"$SCRIPT_DIR/.venv/bin/python\" \"$SCRIPT_DIR/bqe_wisp.py\""

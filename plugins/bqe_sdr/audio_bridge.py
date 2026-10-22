@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from urllib.parse import urlparse
 from urllib.request import urlopen
+from urllib.error import URLError
 
 
 def audio_device(name):
@@ -22,13 +23,26 @@ def audio_recorder(device, samplerate):
     import numpy as np
     if samplerate != 48000:
         raise ValueError('BQE SDR audio uses 48000 Hz; set the decoder/recorder sample rate to 48000')
-    with urlopen(device.sdr_url, timeout=3) as response:
+    try:
+        response = urlopen(device.sdr_url, timeout=3)
+    except URLError as exc:
+        reason = exc.reason
+        if (isinstance(reason, ConnectionRefusedError) or
+                getattr(reason, 'winerror', None) == 10061):
+            raise RuntimeError(
+                f'SDR audio service is not running at {device.sdr_url}. '
+                'Wait for SDR startup to finish. If tracking failed, check the '
+                'tracking log for the SDR startup error, then restart tracking.'
+            ) from exc
+        raise
+    with response:
         if (response.headers.get('X-Audio-Format') != 'f32le' or
                 response.headers.get('X-Audio-Rate') != '48000' or
                 response.headers.get('X-Audio-Channels') != '1'):
             raise ValueError('Unexpected SDR audio stream format')
 
         class Recorder:
+            live_rf = response.headers.get('X-Audio-Source') in ('usb', 'tcp')
             def record(self, numframes):
                 needed = numframes * 4
                 data = bytearray()

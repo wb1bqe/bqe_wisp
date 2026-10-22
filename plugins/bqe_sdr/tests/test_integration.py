@@ -15,6 +15,43 @@ ROOT=Path(__file__).resolve().parents[3]
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_startup_allows_receiver_to_become_ready_after_twelve_seconds(self):
+        receiver = integration.SDRReceiver()
+        response = Mock()
+        response.__enter__ = Mock(return_value=io.BytesIO(json.dumps({'state': 'running', 'instance': 'test'}).encode()))
+        response.__exit__ = Mock(return_value=False)
+        with patch.object(integration.subprocess, 'Popen') as popen, \
+             patch.object(integration, 'STARTUP_TIMEOUT', 60), \
+             patch.object(integration.time, 'monotonic', side_effect=[0, 1, 16]), \
+             patch.object(integration.time, 'sleep'), \
+             patch.object(integration, 'urlopen', side_effect=[OSError('starting'), response]), \
+             patch.object(integration.uuid, 'uuid4', return_value=Mock(hex='test')):
+            popen.return_value.poll.return_value = None
+            receiver.start(dict(receive_sdr=True, frequency_hz=401025000), 'test', {})
+            self.assertIs(receiver.process, popen.return_value)
+            receiver.stop()
+
+    def test_inherited_ssb_filter_adapts_but_explicit_invalid_filter_is_reported(self):
+        for mode, requested, expected in [('USB', 16000, 12000), ('USB', 25000, 12000),
+                                           ('LSB', 16000, 12000), ('USB', 2400, 2400), ('FM', 25000, 25000)]:
+            receiver = integration.SDRReceiver()
+            response = Mock()
+            response.__enter__ = Mock(return_value=io.BytesIO(json.dumps({'state': 'running', 'instance': 'test'}).encode()))
+            response.__exit__ = Mock(return_value=False)
+            with patch.object(integration.subprocess, 'Popen') as popen, patch.object(integration, 'urlopen', return_value=response), patch.object(integration.uuid, 'uuid4', return_value=Mock(hex='test')):
+                popen.return_value.poll.return_value = None
+                config = dict(receive_sdr=True, downlink_frequency_mhz='435.795', downlink_mode=mode, bandwidth=str(requested))
+                receiver.start(config, 'test', {})
+                command = popen.call_args.args[0]
+                self.assertEqual(float(command[command.index('--bandwidth')+1]), expected)
+                receiver.stop()
+                popen.reset_mock()
+                if mode == 'USB':
+                    config['sdr'] = {'bandwidth': 16000}
+                    with self.assertRaisesRegex(ValueError, 'Invalid SDR settings for test: SSB bandwidth'):
+                        receiver.start(config, 'test', {})
+                    popen.assert_not_called()
+
     def test_disabled_sdr_does_not_open_hardware_or_read_config(self):
         receiver=integration.SDRReceiver()
         with patch.object(integration.subprocess,'Popen') as popen, patch.object(integration,'rig_settings') as settings:
@@ -63,7 +100,7 @@ class IntegrationTests(unittest.TestCase):
                 '--idle','--managed','--port','0','--output',folder],stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             try:
-                out,err=child.communicate(timeout=10)
+                out,err=child.communicate(timeout=integration.STARTUP_TIMEOUT + 10)
                 self.assertEqual(child.returncode,0,err.decode())
                 self.assertIn(b'BQE SDR controls:',out)
             finally:

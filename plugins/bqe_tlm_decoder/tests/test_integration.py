@@ -26,6 +26,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(command[command.index('--port')+1], '8769')
             self.assertIn('--managed', command)
             self.assertIn('--fallback-port', command)
+            self.assertNotIn('--combine-fragments', command)
             receiver.stop()
             popen.return_value.stdin.close.assert_called_once()
 

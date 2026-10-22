@@ -466,6 +466,42 @@ def intervals_overlap(start1, end1, start2, end2):
     s2, e2 = start2.utc_datetime(), end2.utc_datetime()
     return (s1 < e2) and (s2 < e1)
 
+
+def load_radio_is_sdr(path):
+    try:
+        with open(path, encoding="utf-8") as stream:
+            config = yaml.safe_load(stream) or {}
+        if not isinstance(config, dict):
+            raise ValueError("radio configuration must be a mapping")
+        return is_true_auto_schedule(config.get("radio_is_sdr"))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"[WARNING] Could not read radio configuration {path}: {exc}. Assuming radio_is_sdr: false.")
+        return False
+
+
+def skip_sdr_required(config, radio_is_sdr):
+    if is_true_auto_schedule(config.get("sdr_required")) and not radio_is_sdr:
+        label = config.get("nickname") or config.get("satellite_name") or config.get("catalog_number")
+        print(f"[WARNING] Skipping satellite '{label}': sdr_required: true but radio_is_sdr: false.")
+        return True
+    return False
+
+
+def skip_named_sdr_satellite(config, name, radio_is_sdr, catalog_number=None):
+    """Apply the same requirement to direct name/NORAD scheduling requests.
+
+    If a spacecraft has multiple profiles, a non-SDR profile remains usable.
+    Nickname scheduling always checks the particular selected profile.
+    """
+    name = str(name).strip().casefold()
+    matches = [entry for entry in iter_satellite_entries(config)
+               if name in {str(entry.get('satellite_name', '')).strip().casefold(),
+                           str(entry.get('catalog_number', '')).strip().casefold()}
+               or (catalog_number is not None and str(entry.get('catalog_number')) == str(catalog_number))]
+    if matches and all(is_true_auto_schedule(entry.get('sdr_required')) for entry in matches):
+        return skip_sdr_required(matches[0], radio_is_sdr)
+    return False
+
 def main():
     combined_passes = []
     sat_names = []
@@ -486,6 +522,8 @@ def main():
     ########################### QTH config file ###################################
     ap.add_argument("--qth_config", type=str, default="bqe_config/my_qth.yaml",
                     help="Path to QTH YAML file (default: bqe_config/my_qth.yaml)")
+    ap.add_argument("--radio_config", default="bqe_config/my_rig.yaml",
+                    help="Radio YAML used to check sdr_required (place before --auto_schedule).")
 
     # Set defaults to None so we can tell if CLI explicitly set them
     ap.add_argument("--lat", type=float, default=None, help="Observer latitude in degrees.")
@@ -512,6 +550,7 @@ def main():
     auto_schedule_config = None
     auto_schedule_config_path = None
     satellites_yaml_path = resolve_satellites_yaml_path(args.satellites_yaml)
+    radio_is_sdr = load_radio_is_sdr(args.radio_config)
 
     # Need to have at least one sat_name or nickname, but can have any mixture of multiples of each.
     if args.auto_schedule:
@@ -571,10 +610,10 @@ def main():
     # process; only the expensive 48-hour orbit scans are sent to workers.
     pass_tasks = []
     schedule_start_utc = datetime.now(timezone.utc)
+    sat_cfg_all = auto_schedule_config if args.auto_schedule else load_satellite_config(satellites_yaml_path)
 
     # -------------- bqe_config/satellites.yaml nickname lookup ----------------
     if args.nickname:
-        sat_cfg_all = auto_schedule_config if args.auto_schedule else load_satellite_config(satellites_yaml_path)
         config_source = auto_schedule_config_path if args.auto_schedule else satellites_yaml_path
 
         for nickname in nicknames:
@@ -588,6 +627,9 @@ def main():
                 exit(1)
             else:
                 print(f"Loaded satellite config for nickname '{nickname}': {satellite_config}")
+
+            if skip_sdr_required(satellite_config, radio_is_sdr):
+                continue
 
             satellite_type = satellite_config.get("satellite_type") or ""
             satellite_name_from_cfg = satellite_config.get("satellite_name")
@@ -628,8 +670,12 @@ def main():
     ########################## Sat names without nicknames ##################
     if args.sat_name:
         for requested_sat_name in sat_names:
+            if skip_named_sdr_satellite(sat_cfg_all, requested_sat_name, radio_is_sdr):
+                continue
             print("--------- Preparing ", requested_sat_name)
             tle_sat_name, tle_line1, tle_line2 = load_tle_by_name_or_id(tle_file, requested_sat_name)
+            if skip_named_sdr_satellite(sat_cfg_all, tle_sat_name, radio_is_sdr, tle_line1[2:7].strip()):
+                continue
             pass_tasks.append({
                 "label": f"satellite {requested_sat_name}",
                 "schedule_sat_name": tle_sat_name,

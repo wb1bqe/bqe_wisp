@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from .orientation import orient_images
 
 ROOT = Path(__file__).resolve().parent
 
@@ -60,13 +61,29 @@ def decode_job(path):
             completed = subprocess.run(args, cwd=str(Path(args[0]).parent), stdout=log,
                 stderr=subprocess.STDOUT, timeout=job['options']['decode_timeout'],
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        images = [str(p.relative_to(path.parent)) for p in Path(job['products']).rglob('*')
-                  if p.suffix.lower() in ('.png', '.jpg', '.jpeg') and p.stat().st_size > 0]
+        
+                # Resolve both sides: Windows TEMP may use an 8.3 alias (ADMINI~1).
+        products = Path(job['products']).resolve()
+        images = [str(p.resolve().relative_to(path.parent)) for p in products.rglob('*')
+                  if p.suffix.lower() in ('.png', '.jpg', '.jpeg') and p.stat().st_size > 0
+                  and 'north_up' not in p.relative_to(products).parts]
+        
         job.update(returncode=completed.returncode, images=images)
+        orient_images(job, path.parent)
         if completed.returncode != 0:
             raise RuntimeError(f'SatDump exited with code {completed.returncode}; see satdump.log')
         job['state'] = 'completed' if images else 'no_images'
         job['message'] = 'Images decoded' if images else 'No images recovered. Check signal, frequency, rate and satellite availability.'
+        if images:
+            orientation = job['orientation']
+            if orientation['direction'] == 'unknown':
+                job['message'] += ' Orientation unchanged: ' + orientation['reason']
+            elif orientation['errors']:
+                job['message'] += ' Some north-up views could not be saved; original images retained. See job details.'
+            elif orientation['rotation_degrees'] == 180:
+                job['message'] += ' South-to-north pass: swaths rotated 180 degrees for north-up viewing.'
+            else:
+                job['message'] += ' North-to-south pass: swaths already north-up.'
     except Exception as exc:
         job.update(state='error', error=str(exc))
     job['finished'] = datetime.now(timezone.utc).isoformat()

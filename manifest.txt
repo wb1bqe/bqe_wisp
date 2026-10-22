@@ -1,0 +1,48 @@
+BQE Wisp distribution manifest guide
+
+release_manifest.json is the authoritative exact file allowlist.
+mkdist.py validates and copies those sources without rewriting their contents.
+Run: python mkdist.py --check
+Build: python mkdist.py
+
+bqe_config/satellites.yaml is copied from the working configuration unchanged.
+templates/satellites_template.yaml is copied from the working template unchanged.
+Neither satellite file is replaced with release_defaults or sanitized.
+General settings, QTH, and rig configuration still use the explicit release defaults.
+
+The allowlist was refreshed on 2026-10-22 for the next single-file executable build.
+It includes AO-123 telemetry, SSTV enhancement/compositing and gallery deletion,
+LRPT orientation and their regression tests, CW SDR filtering, SSTV recovery,
+APRS decoder and spots UI, weather gallery, telemetry charts, and SDR scheduling.
+It also includes plugin connection lifecycle handling, runtime status indicators,
+pass voice announcements, the bundled voice model, and their regression tests.
+The packaging_windows/ and packaging_linux/ build sources are included and present.
+Prepared Python runtimes, build toolchains, and external prerequisites are described
+in RELEASE.md and the platform packaging guides; generated builds are not sources.
+The 2m SSB preset is included. SSDV ships pinned sources, preserved GPL/LGPL
+notices, and a verified source-built Windows renderer; Linux builds natively.
+SatDump is an external prerequisite and is not included.
+See RELEASE.md for complete packaging and installation details.
+Each build writes DISTRIBUTION.json with the actual shipped file sizes and SHA-256 hashes.
+
+HamDRM matrix inversion uses the GPL BQE implementation. The Numerical Recipes
+source/header files are removed, and the Windows helper has been rebuilt.
+
+The 2026-10-22 refresh includes the telemetry satellite dropdown and charts,
+log viewer with return navigation, schedule bolding/next-pass indicator and
+completion-triggered centering, and running-state feedback for Update Keps.
+Settings/downloaded-data backup tools and SoundCard compatibility fixes ship.
+Dependency preflight and tests/test_dependency_requirements.py are included.
+Personal APRS-IS credential files are excluded from releases (settings backups
+include them when present). The existing 46-package Windows lock was checked
+against all current requirements; this refresh adds no third-party packages.
+
+Downloaded-data backup/restore now includes pass recordings and transcript
+sidecars (including the configured recording location), standard SDR WAV/IQ
+recordings and metadata, and APRS upload receipts. LRPT remains excluded.
+These changes use the existing files and standard-library ZIP support.
+
+Single-image builds also publish BQE_Wisp_windows.zip and BQE_Wisp_linux.zip.
+Both ZIPs flatten their image-folder contents and include the release's Quick
+Start Guide PDF beside the executable. These generated archives are outputs,
+not source-manifest entries.

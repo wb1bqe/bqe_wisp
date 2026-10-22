@@ -1,6 +1,7 @@
 # unexcellent/sstv-py (Rust engine), not the older colaclanth command-line tool.
 sstv==0.1.0
 numpy>=1.24,<3
+scipy>=1.10,<2
 Pillow>=10,<13
 soundfile>=0.13,<1
 SoundCard>=0.4.6,<1

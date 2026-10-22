@@ -19,14 +19,25 @@ body{font:16px system-ui;background:#101923;color:#e6edf5;margin:32px auto;paddi
 <section><h2>Validated packets</h2><p><small>Select a packet for fields and raw data. The latest 200 are shown; all packets are saved.</small></p><table><thead><tr><th>Audio time</th><th>Source → destination</th><th>Format</th><th>Baud</th></tr></thead><tbody id="packets"></tbody></table><pre id="detail"></pre></section>
 <script>
 const $=id=>document.getElementById(id);let packets=[],busy=false;
+let deviceInitialized=false;
+$('device').addEventListener('change',()=>{deviceInitialized=true});
+function syncDevice(s){
+ if(deviceInitialized||s.input_device==null)return;
+ const value=s.device_id||s.input_device,select=$('device');
+ if(value&&!Array.from(select.options).some(o=>o.value===value)){
+  const option=document.createElement('option');option.value=value;option.textContent=s.device||value;select.append(option);
+ }
+ select.value=value;
+ deviceInitialized=true;
+}
 function options(){return {device:$('device').value,channel:Number($('channel').value),protocol:$('protocol').value,bauds:[...document.querySelectorAll('#rates input:checked')].map(x=>Number(x.value))}}
-async function request(path,init){const r=await fetch(path,init);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
+async function request(path,init){const r=await BqePluginPage.fetch(path,init);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
 async function action(fn){$('error').textContent='';busy=true;try{await fn()}catch(e){$('error').textContent=e.message}finally{busy=false;refresh()}}
 $('live').onclick=()=>action(()=>request('/live',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}));
 $('stop').onclick=()=>action(()=>request('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}));
 $('decode').onclick=()=>action(async()=>{const file=$('file').files[0];if(!file)throw Error('Choose an audio file first');await request('/file',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name),'X-Options':JSON.stringify(options())},body:file})});
 $('packets').onclick=e=>{const row=e.target.closest('tr[data-i]');if(row)$('detail').textContent=JSON.stringify(packets[Number(row.dataset.i)],null,2)};
-async function refresh(){try{const s=await request('/status');const active=['starting','running','stopping'].includes(s.state);$('state').textContent=(active?'● ':'')+s.state;$('state').className=active?'active':'';$('live').disabled=$('decode').disabled=active||busy;$('stop').disabled=!active;$('status').textContent=`${s.source||''} · ${s.packets} packets · ${(s.audio_seconds||0).toFixed(1)} seconds`+(s.device?' · '+s.device:'')+(s.progress!=null?` · ${(100*s.progress).toFixed(0)}%`:'')+(s.level_dbfs!=null?` · ${s.level_dbfs.toFixed(1)} dBFS`:'')+(s.clipping?' · Audio clipping: lower input gain':'')+(s.skipped_bauds?.length?` · Sample rate too low for: ${s.skipped_bauds.join(', ')}`:'');$('logs').textContent=s.log?`Saved: ${s.log} and ${s.kiss}`:'';if(s.error)$('error').textContent=s.error;packets=s.recent.slice().reverse();$('packets').replaceChildren(...packets.map((p,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;for(const v of [p.audio_seconds.toFixed(3),p.source+' → '+p.destination,p.protocol,p.baud]){const td=document.createElement('td');td.textContent=v;tr.append(td)}return tr}))}catch(e){$('error').textContent='Connection: '+e.message}}
-request('/devices').then(ds=>ds.forEach(d=>{const o=document.createElement('option');o.value=d.id;o.textContent=d.name+(d.loopback?' (loopback)':'');$('device').append(o)})).catch(e=>$('error').textContent=e.message);
-refresh();setInterval(refresh,1000);
+async function refresh(){try{const s=await request('/status');syncDevice(s);const active=['starting','running','stopping'].includes(s.state);$('state').textContent=(active?'● ':'')+s.state;$('state').className=active?'active':'';$('live').disabled=$('decode').disabled=active||busy;$('stop').disabled=!active;$('status').textContent=`${s.source||''} · ${s.packets} packets · ${(s.audio_seconds||0).toFixed(1)} seconds`+(s.device?' · '+s.device:'')+(s.progress!=null?` · ${(100*s.progress).toFixed(0)}%`:'')+(s.level_dbfs!=null?` · ${s.level_dbfs.toFixed(1)} dBFS`:'')+(s.clipping?' · Audio clipping: lower input gain':'')+(s.skipped_bauds?.length?` · Sample rate too low for: ${s.skipped_bauds.join(', ')}`:'');$('logs').textContent=s.log?`Saved: ${s.log} and ${s.kiss}`:'';if(s.error)$('error').textContent=s.error;packets=s.recent.slice().reverse();$('packets').replaceChildren(...packets.map((p,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;for(const v of [p.audio_seconds.toFixed(3),p.source+' → '+p.destination,p.protocol,p.baud]){const td=document.createElement('td');td.textContent=v;tr.append(td)}return tr}))}catch(e){$('error').textContent='Connection: '+e.message}}
+request('/devices').then(ds=>ds.forEach(d=>{if(Array.from($('device').options).some(o=>o.value===d.id))return;const o=document.createElement('option');o.value=d.id;o.textContent=d.name+(d.loopback?' (loopback)':'');$('device').append(o)})).catch(e=>$('error').textContent=e.message);
+BqePluginPage.poll(refresh,1000);
 </script></html>

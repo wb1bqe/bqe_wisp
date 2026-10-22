@@ -1,0 +1,41 @@
+#telemetrySatelliteSelect option.telemetry-no-data { color: #666; font-style: italic; }
+body.modern-ui #telemetrySatelliteSelect option.telemetry-no-data { color: #9ca8b3; }
+#telemetrySatelliteSelect option.telemetry-recent-data { color: #187d37; }
+body.modern-ui #telemetrySatelliteSelect option.telemetry-recent-data { color: #65d98b; }
+#telemetryModal .config-box { width: min(1160px, calc(100vw - 36px)); max-height: calc(100vh - 40px); overflow-y: auto; box-sizing: border-box; }
+#telemetryModal p { line-height: 1.45; }
+.telemetry-summary { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 12px; }
+.telemetry-summary > div { padding: 12px; border: 1px solid #777; background: rgba(255,255,255,.22); }
+.telemetry-summary span { display: block; font-size: 13px; margin-bottom: 7px; }
+.telemetry-summary strong { display: block; font-size: 16px; overflow-wrap: anywhere; }
+#telemetryFields .config-fields { grid-template-columns: minmax(150px, 1.2fr) minmax(100px, .7fr) minmax(240px, 1.5fr); }
+#telemetryFields label { text-align: left; font-size: 16px; overflow-wrap: anywhere; }
+#telemetryFields input { width: 100%; min-width: 0; box-sizing: border-box; }
+#telemetryModal select { width: 100%; min-width: 0; }
+#telemetryFields section { border-top: 1px solid #888; padding-top: 10px; margin-top: 16px; }
+#telemetryFields h3 { font-size: 18px; margin: 0 0 10px; }
+#telemetryRaw { font: 13px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+#telemetryLogPath, #telemetryScope { font-size: 12px; overflow-wrap: anywhere; }
+body.modern-ui .telemetry-summary > div { border: 1px solid #3f7199; border-radius: 7px; background: #091c2e; }
+body.modern-ui .telemetry-summary strong { color: #7beac7; }
+body.modern-ui #telemetryFields section { border-color: #3f7199; }
+.telemetry-trend { min-width: 0; padding: 5px 9px; border: 1px solid #888; background: rgba(255,255,255,.25); }
+.telemetry-trend svg { display: block; width: 100%; height: 52px; }
+.telemetry-trend-range, .telemetry-trend-times { font: 11px/1.4 Consolas, monospace; }
+.telemetry-trend-times { display: flex; justify-content: space-between; gap: 12px; }
+.telemetry-trend-line { fill: none; stroke: #145080; stroke-width: 1.8; }
+.telemetry-trend-axis { fill: none; stroke: #888; stroke-width: .6; }
+.telemetry-trend-dot { fill: #145080; }
+.telemetry-trend-selected { fill: #b34700; stroke: white; stroke-width: 1; }
+.telemetry-trend-empty { border: none; background: transparent; font-size: 12px; opacity: .75; }
+body.modern-ui .telemetry-trend { border-color: #3f7199; border-radius: 5px; background: #091c2e; }
+body.modern-ui .telemetry-trend-line { stroke: #67dcff; }
+body.modern-ui .telemetry-trend-dot { fill: #67dcff; }
+body.modern-ui .telemetry-trend-selected { fill: #ffc56b; stroke: #091c2e; }
+body.modern-ui .telemetry-trend-empty { border: none; background: transparent; }
+body.detached-map-mode #telemetryModal, body.detached-fdt-mode #telemetryModal { display: none; }
+@media (max-width: 650px) {
+  .telemetry-summary { grid-template-columns: 1fr; gap: 6px; }
+  #telemetryModal #telemetryFields .config-fields, #telemetryModal .config-fields { grid-template-columns: 1fr; }
+  #telemetryModal .config-fields label { text-align: left; }
+}

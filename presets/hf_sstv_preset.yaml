@@ -1,9 +1,12 @@
 nickname: "hf_sstv"
+decode_sstv_images: true  # Uses radio_soundcard from my_rig.yaml.
 channel_name: "20m SSTV on 14.230"  # 14.230 sstv calling freq
 type: "HF"
 frequency_hz: "14230000"
 mode: "USB"
 bandwidth: "3000"
 agc: medium
-squelch_level: disabled
-program_to_run_while_waiting: "c:/ham/mmsstv/mmsstv.exe"
+record_sstv: true
+squelch_level: 0
+program_to_run_while_waiting: ''
+

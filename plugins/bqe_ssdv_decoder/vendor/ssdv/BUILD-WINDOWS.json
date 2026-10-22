@@ -1,0 +1,25 @@
+{
+  "revision": "d1ceda81b69f88741396f3e052b50c8ae40efb76",
+  "source_sha256_lf": {
+    "main.c": "28cfa8e6e514188ec5cbc450c9795447e04ac4ad3ace20040337cabacf0cdbf6",
+    "ssdv.c": "817c3a3a099a8c436b5e7d3f22927710f40f5cad4c0299c8d35fda70a3fecf32",
+    "ssdv.h": "e816ca9e9d9c8d29ab95b46bb841c8b790c73b250b22bea995a672717f40f22e",
+    "rs8.c": "f18506a7e0b2b6e09e7c091832bd134955423edc93a5de09fb5024fe3924ab32",
+    "rs8.h": "92fd64668da25bc79117674519af73410aeaee1c1030f1a8b1f312751a6abf99",
+    "Makefile": "d85ac51a580f8b68a9ede5b5b7a75e464bc1c58b8d505efe21ec26d1d61b51e1",
+    "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  "compiler": "x86_64-w64-mingw32-gcc (GCC) 9.3-win32 20200320",
+  "flags": [
+    "-O3",
+    "-Wall",
+    "-static",
+    "-Wl,--no-insert-timestamp"
+  ],
+  "sources": [
+    "main.c",
+    "ssdv.c",
+    "rs8.c"
+  ],
+  "binary_sha256": "fb7cbfd4bc665dbd68256b17767cbc973969dcd19c55cbf8e8f89fbf051f35aa"
+}

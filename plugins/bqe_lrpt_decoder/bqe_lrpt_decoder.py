@@ -12,7 +12,7 @@ from urllib.parse import urlparse, unquote
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parents[1]))
-from plugins.decoder_http import DecoderServer
+from plugins.decoder_http import DecoderServer, decoder_page
 from plugins.bqe_lrpt_decoder.config import Options
 from plugins.bqe_lrpt_decoder.engine import decode_job, executable
 from plugins.bqe_lrpt_decoder.service import Session
@@ -53,7 +53,7 @@ def handler(session, defaults, instance=None):
             path = unquote(urlparse(self.path).path)
             try:
                 if path == '/':
-                    self.reply(200, (ROOT/'index.html').read_bytes(), 'text/html; charset=utf-8')
+                    self.reply(200, decoder_page((ROOT/'index.html')), 'text/html; charset=utf-8')
                 elif path == '/status':
                     self.reply(200, dict(session.snapshot(), instance=instance, jobs=session.jobs()))
                 elif path == '/defaults':

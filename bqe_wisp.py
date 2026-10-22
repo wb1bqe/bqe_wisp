@@ -62,6 +62,9 @@ DEFAULT_GENERAL_SETTINGS = {
     # the satellite tracking/Doppler cadence in bqe_track_continuously.
     "scheduler_sleep_interval_seconds": 30.0,
     "idle_tuning_delay_seconds": 3.0,
+    "pass_announcements_enabled": True,
+    "pass_announcements_windows_fallback": True,
+    "pass_announcements_cache_size": 20,
     # Tracking-loop cadence defaults. These are read from the
     # bqe_track_continuously section and also shown by the FDT Console.
     "tracking_sleep_interval_seconds": 10.0,
@@ -162,6 +165,17 @@ def load_general_settings(filename=GENERAL_SETTINGS_FILE):
     program_settings = root.get("program_settings") or {}
     common_settings = _settings_section(program_settings, "common")
     wisp_settings = _settings_section(program_settings, "bqe_wisp")
+    for key in ('pass_announcements_enabled', 'pass_announcements_windows_fallback'):
+        value = wisp_settings.get(key, True)
+        if isinstance(value, bool):
+            settings[key] = value
+        else:
+            print(f'Warning: {key} must be true or false; using true.')
+    cache_size = wisp_settings.get('pass_announcements_cache_size', 20)
+    if type(cache_size) is int and cache_size >= 0:
+        settings['pass_announcements_cache_size'] = cache_size
+    else:
+        print('Warning: pass_announcements_cache_size must be a nonnegative integer; using 20.')
     track_settings = _settings_section(program_settings, "bqe_track_continuously")
     third_party_settings = _settings_section(program_settings, "third_party")
 
@@ -503,6 +517,7 @@ def run_environment_diagnostics(emit=True, include_plugin_tests=False):
 STATE_LOCK = threading.RLock()
 FDT_TUNING_LOCK = threading.RLock()
 AUDIO_RECORDING_LOCK = threading.RLock()
+PRESET_LIFECYCLE_LOCK = threading.RLock()
 CURRENT_AUDIO_RECORDER = None
 APP_STATE = {
     "passes": [],
@@ -1321,12 +1336,14 @@ def run_pass(pass_entry, start, end):
     if SHUTDOWN_EVENT.is_set():
         return
 
-    # Serialize the handoff with manual starts.  Mark tracking active before
-    # releasing the lock so a browser request cannot restart idle recording.
-    with AUDIO_RECORDING_LOCK:
-        stop_audio_recording()
-        with STATE_LOCK:
-            APP_STATE["tracking_running"] = True
+    # Finish any in-flight preset selection before releasing its audio input.
+    # Mark tracking active under the same lock so no idle decoder can restart.
+    with PRESET_LIFECYCLE_LOCK:
+        with AUDIO_RECORDING_LOCK:
+            stop_audio_recording()
+            with STATE_LOCK:
+                APP_STATE["tracking_running"] = True
+        stop_idle_wait_program()
 
     CURRENT_PASS_END_EVENT.clear()
     sat_name = pass_entry["_satellite"]
@@ -1409,6 +1426,10 @@ def run_pass(pass_entry, start, end):
                 APP_STATE["current_satellite"] = None
             return
 
+        from plugins.pass_announcements import PASS_ANNOUNCER
+        PASS_ANNOUNCER.announce(sat_name, 'beginning', GENERAL_SETTINGS['pass_announcements_enabled'],
+                                GENERAL_SETTINGS['pass_announcements_windows_fallback'],
+                                GENERAL_SETTINGS['pass_announcements_cache_size'])
         try:
             wait_result = sleep_until_pass_end_or_timeout(duration)
             if wait_result == "shutdown":
@@ -1417,6 +1438,9 @@ def run_pass(pass_entry, start, end):
                 print(f"[INFO] End Current Pass requested. Stopping {sat_name} early.")
         finally:
             stop_time = utc_now()
+            PASS_ANNOUNCER.announce(sat_name, 'ended', GENERAL_SETTINGS['pass_announcements_enabled'],
+                                    GENERAL_SETTINGS['pass_announcements_windows_fallback'],
+                                    GENERAL_SETTINGS['pass_announcements_cache_size'])
             print(f"[INFO] Stopping {sat_name} at {stop_time.isoformat()} ...")
             CURRENT_PASS_END_EVENT.set()
             clear_fdt_control_state("satellite pass ended")
@@ -1569,6 +1593,11 @@ def make_audio_recorder():
         options.input_device = audio_input(radio_config)
         options.device = None
         options.sample_rate = 48000
+    elif not recorder_args:
+        options.input_device = radio_config.get("radio_soundcard")
+        if not options.input_device:
+            raise ValueError("Audio recording requires radio_soundcard in my_rig.yaml")
+        options.device = None
     directory = load_web_console_settings(GENERAL_SETTINGS_FILE).recordings_location
     directory = os.path.expanduser(directory or "plugins/bqe_sound_recorder/recordings")
     if not os.path.isabs(directory):
@@ -1670,52 +1699,56 @@ def program_preset_from_web(nickname):
         "nickname": nickname,
         "message": message,
     }
-    helper_process = None
-    try:
-        # A wait-time helper belongs to the preset that launched it.  Stop it
-        # before changing frequency/mode so a program such as WSJT-X or MMSSTV
-        # from the previous preset cannot continue running against the newly
-        # selected radio configuration.
-        stop_idle_wait_program(
-            reason=f"before applying radio preset {nickname!r}"
-        )
-        idle_task_ctl.program_preset_by_nickname(nickname)
-        helper_process = start_idle_wait_program(preset_nickname=nickname)
+    with PRESET_LIFECYCLE_LOCK:
+        helper_process = None
+        try:
+            if SHUTDOWN_EVENT.is_set() or satellite_pass_is_active():
+                raise RuntimeError("Preset selection interrupted by a pass or shutdown")
+            # A wait-time helper belongs to the preset that launched it.  Stop it
+            # before changing frequency/mode so a program such as WSJT-X or MMSSTV
+            # from the previous preset cannot continue running against the newly
+            # selected radio configuration.
+            stop_idle_wait_program(
+                reason=f"before applying radio preset {nickname!r}"
+            )
+            idle_task_ctl.program_preset_by_nickname(nickname)
+            helper_process = start_idle_wait_program(preset_nickname=nickname)
 
-        status_updated = update_idle_task_status_for_preset(nickname)
-        message = f"Radio programmed with preset {nickname}. Waiting for the next pass."
-        if status_updated:
-            message += " Updated idle_task_status.yaml."
-        if helper_process is not None:
-            message += f" Started its wait-time program (PID {helper_process.pid})."
+            status_updated = update_idle_task_status_for_preset(nickname)
+            message = f"Radio programmed with preset {nickname}. Waiting for the next pass."
+            if status_updated:
+                message += " Updated idle_task_status.yaml."
+            if helper_process is not None:
+                message += f" Started its wait-time program (PID {helper_process.pid})."
 
-        result = {
-            "ok": True,
-            "action": "program_preset",
-            "nickname": nickname,
-            "message": message,
-        }
-        print(f"[WEB PRESET] {message}")
-        return result
-    except Exception as e:
-        stop_idle_wait_program(
-            helper_process,
-            reason=f"after radio preset {nickname!r} failed",
-        )
-        message = f"Could not program preset {nickname!r}: {e}"
-        result = {
-            "ok": False,
-            "action": "program_preset",
-            "nickname": nickname,
-            "message": message,
-        }
-        print(f"[WEB PRESET] {message}")
-        return result
-    finally:
-        with STATE_LOCK:
-            APP_STATE["preset_command_running"] = False
-            APP_STATE["last_message"] = message
-            APP_STATE["last_command_result"] = result
+            result = {
+                "ok": True,
+                "action": "program_preset",
+                "nickname": nickname,
+                "message": message,
+            }
+            print(f"[WEB PRESET] {message}")
+            return result
+        except Exception as e:
+            stop_idle_wait_program(
+                helper_process,
+                reason=f"after radio preset {nickname!r} failed",
+            )
+            message = f"Could not program preset {nickname!r}: {e}"
+            result = {
+                "ok": False,
+                "action": "program_preset",
+                "nickname": nickname,
+                "message": message,
+            }
+            print(f"[WEB PRESET] {message}")
+            return result
+        finally:
+            with STATE_LOCK:
+                APP_STATE["preset_command_running"] = False
+                APP_STATE["last_message"] = message
+                APP_STATE["last_command_result"] = result
+
 
 def load_preset_config_by_nickname(nickname):
     """Find and load a preset YAML file by its nickname field.
@@ -1827,7 +1860,7 @@ def command_from_yaml_value(value):
 
 
 def start_idle_wait_program(preset_nickname=None):
-    """Start the external wait-time program for a preset.
+    """Start preset decoders and the optional external wait-time program.
 
     When ``preset_nickname`` is omitted, use ``radio_idle_preset_nickname``
     from bqe_config/my_rig.yaml.  A caller such as the web preset handler can
@@ -1855,109 +1888,121 @@ def start_idle_wait_program(preset_nickname=None):
     """
     global CURRENT_IDLE_PROCESS
 
-    if SHUTDOWN_EVENT.is_set():
-        return None
-
-    if yaml is None:
-        print("Warning: PyYAML not available; skipping idle wait program.")
-        return None
-
-    idle_preset_nickname = preset_nickname
-    if idle_preset_nickname is None:
-        radio_config_path = os.path.join(SCRIPT_DIR, "bqe_config", "my_rig.yaml")
-        try:
-            with open(radio_config_path, "r", encoding="utf-8") as f:
-                radio_cfg = yaml.safe_load(f) or {}
-            idle_preset_nickname = radio_cfg.get("radio_idle_preset_nickname")
-        except FileNotFoundError:
-            print(f"Warning: rig config file {radio_config_path} not found. Skipping idle wait program.")
-            return None
-        except Exception as e:
-            print(f"Warning: Could not parse rig config file {radio_config_path}: {e}. Skipping idle wait program.")
+    with PRESET_LIFECYCLE_LOCK:
+        if SHUTDOWN_EVENT.is_set() or satellite_pass_is_active():
             return None
 
-    if not idle_preset_nickname or idle_preset_nickname == 'None' or idle_preset_nickname == '':
-        print("Warning: no idle preset nickname is set. Skipping idle wait program.")
-        return None
-
-    idle_preset_nickname = str(idle_preset_nickname).strip()
-    program_to_run = None
-    try:
-        idle_preset_cfg = load_preset_config_by_nickname(idle_preset_nickname)
-        if not idle_preset_cfg:
-            print(
-                f"Warning: idle preset {idle_preset_nickname!r} was not found under "
-                f"{os.path.join(SCRIPT_DIR, 'presets')}."
-            )
+        if yaml is None:
+            print("Warning: PyYAML not available; skipping idle wait program.")
             return None
 
-        program_to_run = idle_preset_cfg.get("program_to_run_while_waiting")
-        # SSTV reception has its own lifecycle and may run alongside an
-        # optional recorder/helper, including presets with no helper command.
-        from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
-        from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
-        from plugins.bqe_sdr.integration import SDR_RECEIVER
-        from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER, enabled as lrpt_enabled
-        if lrpt_enabled(idle_preset_cfg):
-            LRPT_RECEIVER.start(idle_preset_cfg, idle_preset_nickname)
-        else:
-            SDR_RECEIVER.start(idle_preset_cfg, idle_preset_nickname)
-        for receiver in (SSTV_RECEIVER, SSDV_RECEIVER):
+        idle_preset_nickname = preset_nickname
+        if idle_preset_nickname is None:
+            radio_config_path = os.path.join(SCRIPT_DIR, "bqe_config", "my_rig.yaml")
             try:
-                receiver.start(idle_preset_cfg, idle_preset_nickname)
-            except Exception as exc:
-                print(f'[WARNING] Could not start {receiver.label} reception: {exc}')
-        if not program_to_run:
+                with open(radio_config_path, "r", encoding="utf-8") as f:
+                    radio_cfg = yaml.safe_load(f) or {}
+                idle_preset_nickname = radio_cfg.get("radio_idle_preset_nickname")
+            except FileNotFoundError:
+                print(f"Warning: rig config file {radio_config_path} not found. Skipping idle wait program.")
+                return None
+            except Exception as e:
+                print(f"Warning: Could not parse rig config file {radio_config_path}: {e}. Skipping idle wait program.")
+                return None
+
+        if not idle_preset_nickname or idle_preset_nickname == 'None' or idle_preset_nickname == '':
+            print("Warning: no idle preset nickname is set. Skipping idle wait program.")
+            return None
+
+        idle_preset_nickname = str(idle_preset_nickname).strip()
+        program_to_run = None
+        try:
+            idle_preset_cfg = load_preset_config_by_nickname(idle_preset_nickname)
+            if not idle_preset_cfg:
+                print(
+                    f"Warning: idle preset {idle_preset_nickname!r} was not found under "
+                    f"{os.path.join(SCRIPT_DIR, 'presets')}."
+                )
+                return None
+
+            program_to_run = idle_preset_cfg.get("program_to_run_while_waiting")
+            # SSTV reception has its own lifecycle and may run alongside an
+            # optional recorder/helper, including presets with no helper command.
+            from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
+            from plugins.bqe_hf_image_decoder.integration import HF_IMAGE_RECEIVER
+            from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
+            from plugins.bqe_marmotsat_decoder.integration import MARMOTSAT_RECEIVER
+            from plugins.bqe_so127_decoder.integration import SO127_RECEIVER
+            from plugins.bqe_monitor_decoder.integration import MONITOR_RECEIVER
+            from plugins.bqe_lasarsat_decoder.integration import LASARSAT_RECEIVER
+            from plugins.bqe_otp2_decoder.integration import OTP2_RECEIVER
+            from plugins.bqe_rs61_decoder.integration import RS61_RECEIVER
+            from plugins.bqe_ao123_decoder.integration import AO123_RECEIVER
+            from plugins.bqe_aprs_decoder.integration import APRS_RECEIVER
+            from plugins.bqe_sdr.integration import SDR_RECEIVER
+            from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER, enabled as lrpt_enabled
+            if lrpt_enabled(idle_preset_cfg):
+                LRPT_RECEIVER.start(idle_preset_cfg, idle_preset_nickname)
+            else:
+                SDR_RECEIVER.start(idle_preset_cfg, idle_preset_nickname)
+            for receiver in (SSTV_RECEIVER, SSDV_RECEIVER, SO127_RECEIVER, MARMOTSAT_RECEIVER, MONITOR_RECEIVER, HF_IMAGE_RECEIVER, LASARSAT_RECEIVER, OTP2_RECEIVER, RS61_RECEIVER, AO123_RECEIVER, APRS_RECEIVER):
+                try:
+                    decoder_config = (dict(idle_preset_cfg, _aprs_reception_context='idle_preset')
+                                      if receiver is APRS_RECEIVER else idle_preset_cfg)
+                    receiver.start(decoder_config, idle_preset_nickname)
+                except Exception as exc:
+                    print(f'[WARNING] Could not start {receiver.label} reception: {exc}')
+            if not program_to_run:
+                print(
+                    f"[INFO] Idle preset {idle_preset_nickname!r} was found in "
+                    f"{idle_preset_cfg.get('_source_file', 'unknown file')}, but it has no "
+                    "program_to_run_while_waiting entry; no idle program will be run."
+                )
+                return None
+
+            command = command_from_yaml_value(program_to_run)
+            if not command:
+                print(f"[INFO]: program_to_run_while_waiting for idle preset {idle_preset_nickname!r} is empty.")
+                return None
+
+            tuning_delay = GENERAL_SETTINGS["idle_tuning_delay_seconds"]
+            print(f"[INFO] Waiting {tuning_delay:g} seconds after tuning before launching the idle program.")
+            if not sleep_until_shutdown_or_timeout(tuning_delay):
+                return None
+
+            print("[INFO] Starting idle wait program while waiting for next satellite")
+            print(f"[INFO] Idle preset nickname: {idle_preset_nickname}")
+            print(f"[INFO] Idle preset file: {idle_preset_cfg.get('_source_file', 'unknown file')}")
+            print(f"Command: {' '.join(command)}")
+
+            os.makedirs(os.path.dirname(IDLE_WAIT_PROGRAM_PID_FILE), exist_ok=True)
+            popen_kwargs = {"cwd": SCRIPT_DIR}
+            if os.name == "nt":
+                # Give Windows GUI/console programs their own process group.
+                # taskkill /T below will still be used for reliable cleanup.
+                popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            else:
+                # Put the idle program and any children in their own process group so
+                # Linux cleanup can stop the whole group before a satellite pass starts.
+                popen_kwargs["start_new_session"] = True
+
+            process = subprocess.Popen(command, **popen_kwargs)
+            CURRENT_IDLE_PROCESS = process
+            with open(IDLE_WAIT_PROGRAM_PID_FILE, "w", encoding="utf-8") as f:
+                f.write(str(process.pid))
+
+            with STATE_LOCK:
+                APP_STATE["last_message"] = f"Started idle wait program: {' '.join(command)}"
+            return process
+
+        except FileNotFoundError:
             print(
-                f"[INFO] Idle preset {idle_preset_nickname!r} was found in "
-                f"{idle_preset_cfg.get('_source_file', 'unknown file')}, but it has no "
-                "program_to_run_while_waiting entry; no idle program will be run."
+                f"Warning: idle wait program {program_to_run!r} was not found on the system PATH."
             )
-            return None
+        except Exception as e:
+            print(f"Warning: idle wait program failed to start: {e}")
 
-        command = command_from_yaml_value(program_to_run)
-        if not command:
-            print(f"[INFO]: program_to_run_while_waiting for idle preset {idle_preset_nickname!r} is empty.")
-            return None
-
-        tuning_delay = GENERAL_SETTINGS["idle_tuning_delay_seconds"]
-        print(f"[INFO] Waiting {tuning_delay:g} seconds after tuning before launching the idle program.")
-        if not sleep_until_shutdown_or_timeout(tuning_delay):
-            return None
-
-        print("[INFO] Starting idle wait program while waiting for next satellite")
-        print(f"[INFO] Idle preset nickname: {idle_preset_nickname}")
-        print(f"[INFO] Idle preset file: {idle_preset_cfg.get('_source_file', 'unknown file')}")
-        print(f"Command: {' '.join(command)}")
-
-        os.makedirs(os.path.dirname(IDLE_WAIT_PROGRAM_PID_FILE), exist_ok=True)
-        popen_kwargs = {"cwd": SCRIPT_DIR}
-        if os.name == "nt":
-            # Give Windows GUI/console programs their own process group.
-            # taskkill /T below will still be used for reliable cleanup.
-            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            # Put the idle program and any children in their own process group so
-            # Linux cleanup can stop the whole group before a satellite pass starts.
-            popen_kwargs["start_new_session"] = True
-
-        process = subprocess.Popen(command, **popen_kwargs)
-        CURRENT_IDLE_PROCESS = process
-        with open(IDLE_WAIT_PROGRAM_PID_FILE, "w", encoding="utf-8") as f:
-            f.write(str(process.pid))
-
-        with STATE_LOCK:
-            APP_STATE["last_message"] = f"Started idle wait program: {' '.join(command)}"
-        return process
-
-    except FileNotFoundError:
-        print(
-            f"Warning: idle wait program {program_to_run!r} was not found on the system PATH."
-        )
-    except Exception as e:
-        print(f"Warning: idle wait program failed to start: {e}")
-
-    return None
+        return None
 
 
 def stop_idle_wait_program(
@@ -1972,74 +2017,93 @@ def stop_idle_wait_program(
     """
     global CURRENT_IDLE_PROCESS
 
-    from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
-    from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
-    from plugins.bqe_sdr.integration import SDR_RECEIVER
-    from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER
-    SSTV_RECEIVER.stop()
-    SSDV_RECEIVER.stop()
-    SDR_RECEIVER.stop()
-    LRPT_RECEIVER.stop()
+    with PRESET_LIFECYCLE_LOCK:
+        from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
+        from plugins.bqe_hf_image_decoder.integration import HF_IMAGE_RECEIVER
+        from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
+        from plugins.bqe_marmotsat_decoder.integration import MARMOTSAT_RECEIVER
+        from plugins.bqe_so127_decoder.integration import SO127_RECEIVER
+        from plugins.bqe_monitor_decoder.integration import MONITOR_RECEIVER
+        from plugins.bqe_lasarsat_decoder.integration import LASARSAT_RECEIVER
+        from plugins.bqe_otp2_decoder.integration import OTP2_RECEIVER
+        from plugins.bqe_rs61_decoder.integration import RS61_RECEIVER
+        from plugins.bqe_ao123_decoder.integration import AO123_RECEIVER
+        from plugins.bqe_aprs_decoder.integration import APRS_RECEIVER
+        from plugins.bqe_sdr.integration import SDR_RECEIVER
+        from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER
+        SSTV_RECEIVER.stop()
+        HF_IMAGE_RECEIVER.stop()
+        SSDV_RECEIVER.stop()
+        MARMOTSAT_RECEIVER.stop()
+        SO127_RECEIVER.stop()
+        MONITOR_RECEIVER.stop()
+        LASARSAT_RECEIVER.stop()
+        OTP2_RECEIVER.stop()
+        RS61_RECEIVER.stop()
+        AO123_RECEIVER.stop()
+        APRS_RECEIVER.stop()
+        SDR_RECEIVER.stop()
+        LRPT_RECEIVER.stop()
 
-    if process is None:
-        process = CURRENT_IDLE_PROCESS
-    if process is None:
-        return
+        if process is None:
+            process = CURRENT_IDLE_PROCESS
+        if process is None:
+            return
 
-    pid = process.pid
-    if process.poll() is not None:
+        pid = process.pid
+        if process.poll() is not None:
+            try:
+                if os.path.exists(pid_file):
+                    os.remove(pid_file)
+            except OSError:
+                pass
+            if CURRENT_IDLE_PROCESS is process:
+                CURRENT_IDLE_PROCESS = None
+            return
+
+        reason_text = str(reason or "").strip() or "during idle-program cleanup"
+        print(f"Stopping idle wait program PID {pid} {reason_text}...")
         try:
-            if os.path.exists(pid_file):
-                os.remove(pid_file)
-        except OSError:
-            pass
-        if CURRENT_IDLE_PROCESS is process:
-            CURRENT_IDLE_PROCESS = None
-        return
-
-    reason_text = str(reason or "").strip() or "during idle-program cleanup"
-    print(f"Stopping idle wait program PID {pid} {reason_text}...")
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-        else:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                print("Idle wait program did not exit cleanly; force killing process group...")
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
                 try:
-                    os.killpg(pid, signal.SIGKILL)
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                try:
+                    os.killpg(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
                 try:
-                    process.wait(timeout=5)
+                    process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    pass
-    except Exception as e:
-        print(f"Warning: unable to stop idle wait program PID {pid}: {e}")
-    finally:
-        try:
-            if os.path.exists(pid_file):
-                os.remove(pid_file)
-        except OSError:
-            pass
-        if CURRENT_IDLE_PROCESS is process:
-            CURRENT_IDLE_PROCESS = None
-        with STATE_LOCK:
-            APP_STATE["last_message"] = f"Stopped idle wait program {reason_text}."
+                    print("Idle wait program did not exit cleanly; force killing process group...")
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+        except Exception as e:
+            print(f"Warning: unable to stop idle wait program PID {pid}: {e}")
+        finally:
+            try:
+                if os.path.exists(pid_file):
+                    os.remove(pid_file)
+            except OSError:
+                pass
+            if CURRENT_IDLE_PROCESS is process:
+                CURRENT_IDLE_PROCESS = None
+            with STATE_LOCK:
+                APP_STATE["last_message"] = f"Stopped idle wait program {reason_text}."
 
 
 def terminate_popen_process(process, process_name="process", timeout=10):
@@ -2183,13 +2247,16 @@ def do_while_waiting():  # The specific waiting task is defined as radio_idle_pr
         # companion's radio access before tuning and launching the new one.
         if not sleep_until_shutdown_or_timeout(5):
             return None
-        stop_idle_wait_program(reason=f"before applying idle preset {nickname!r}")
-        idle_task_ctl.program_preset_by_nickname(nickname)
-        helper_process = start_idle_wait_program(preset_nickname=nickname)
-        try:
-            begin_idle_task_status(nickname)
-        except Exception as e:
-            print(f"Warning: could not create {IDLE_TASK_STATUS_FILE}: {e}")
+        with PRESET_LIFECYCLE_LOCK:
+            if SHUTDOWN_EVENT.is_set() or satellite_pass_is_active():
+                return None
+            stop_idle_wait_program(reason=f"before applying idle preset {nickname!r}")
+            idle_task_ctl.program_preset_by_nickname(nickname)
+            helper_process = start_idle_wait_program(preset_nickname=nickname)
+            try:
+                begin_idle_task_status(nickname)
+            except Exception as e:
+                print(f"Warning: could not create {IDLE_TASK_STATUS_FILE}: {e}")
     else:
         print("[INFO] Idle_preset_nickname not defined.  Skipping idle task start")
         helper_process = None
@@ -3031,10 +3098,23 @@ def _start_script_command(action, display_name, script_path, script_args=None, r
     return {"ok": True, "action": action, "message": f"{display_name} started."}
 
 
+def speech_announcements_enabled():
+    from plugins.pass_announcements import PASS_ANNOUNCER
+    return PASS_ANNOUNCER.is_enabled(GENERAL_SETTINGS['pass_announcements_enabled'])
+
+
 def handle_web_command(action, request_payload=None):
     """Run a command requested from the web-console menus or preset pane."""
     action = str(action or "").strip().lower()
     request_payload = request_payload if isinstance(request_payload, dict) else {}
+
+    if action in ("enable_speech_announcements", "disable_speech_announcements"):
+        from plugins.pass_announcements import PASS_ANNOUNCER
+        enabled = action == "enable_speech_announcements"
+        PASS_ANNOUNCER.set_enabled(enabled)
+        message = f"Speech announcements {'enabled' if enabled else 'silenced'} for this session."
+        _set_status_message(message)
+        return {"ok": True, "action": action, "message": message}
 
     if action in ("start_audio_recording", "stop_audio_recording"):
         return control_audio_recording(action)
@@ -3840,6 +3920,10 @@ def status_payload():
     recording_status = audio_recording_status()
     from plugins.bqe_sound_recorder.bqe_sound_recorder import external_recording_status
     pass_recording_status = external_recording_status()
+    from plugins.runtime_status import running_plugins, program_label
+    local_plugins = running_plugins([
+        ('idle_program', program_label(CURRENT_IDLE_PROCESS), CURRENT_IDLE_PROCESS),
+    ])
     tracking_status = augment_tracking_status_for_map(read_tracking_status(), observer_location)
     fdt_console_status = read_fdt_console_status()
     fdt_console_status = update_test_pass_fdt_console_status(
@@ -3893,11 +3977,16 @@ def status_payload():
             "message": APP_STATE["last_message"],
             "tracking_running": APP_STATE["tracking_running"],
             "pass_active": pass_active,
+            "speech_announcements_enabled": speech_announcements_enabled(),
             "audio_recording": recording_status,
             "external_audio_recording": pass_recording_status,
             "current_satellite": APP_STATE["current_satellite"],
             "current_log": APP_STATE["current_log"],
             "tracking_status": tracking_status,
+            "running_plugins": local_plugins + (
+                tracking_status.get('running_plugins', [])
+                if APP_STATE['tracking_running'] and not tracking_status.get('stale') else []
+            ),
             "observer_location": observer_location,
             "celestial_positions": celestial_positions,
             "command_running": APP_STATE.get("command_running", False),
@@ -3993,6 +4082,15 @@ def start_web_console(port=None):
 
 
 def main():
+    from bqe_instance import SchedulerAlreadyRunning, SchedulerLock
+    try:
+        with SchedulerLock(os.path.join(LOG_DIR, 'scheduler.lock')):
+            _main_owned()
+    except SchedulerAlreadyRunning as exc:
+        print(f'[ERROR] {exc}', file=sys.stderr)
+
+
+def _main_owned():
     restore_default_keyboard_interrupt_handler()
     run_environment_diagnostics()
     # Clear temporary/stale runtime files left by a previous scheduler process.
@@ -4120,6 +4218,8 @@ def main():
         try:
             if web_server is not None:
                 from plugins.bqe_audio_stream import AUDIO_STREAM
+                from plugins.bqe_audio_stream.listen import RADIO_LISTEN
+                RADIO_LISTEN.close()
                 AUDIO_STREAM.close()
                 web_server.shutdown()
                 web_server.server_close()

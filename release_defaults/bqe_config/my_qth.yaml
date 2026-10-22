@@ -1,0 +1,6 @@
+# Neutral beta defaults. Configure your station before enabling passes.
+my_callsign: NOCALL
+my_latitude: 0.0
+my_longitude: 0.0
+my_altitude: 0.0
+my_country: ''

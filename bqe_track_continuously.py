@@ -36,8 +36,18 @@ import yaml       # For loading configs from YAML
 import bqe_hamlib_interface as rig
 from plugins.bqe_sstv_decoder.integration import SSTV_RECEIVER
 from plugins.bqe_tlm_decoder.integration import TELEMETRY_RECEIVER
+from plugins.bqe_marmotsat_decoder.integration import MARMOTSAT_RECEIVER
+from plugins.bqe_so127_decoder.integration import SO127_RECEIVER
+from plugins.bqe_monitor_decoder.integration import MONITOR_RECEIVER
+from plugins.bqe_lasarsat_decoder.integration import LASARSAT_RECEIVER
+from plugins.bqe_otp2_decoder.integration import OTP2_RECEIVER
+from plugins.bqe_rs61_decoder.integration import RS61_RECEIVER
+from plugins.bqe_ao123_decoder.integration import AO123_RECEIVER
+from plugins.bqe_aprs_decoder.integration import APRS_RECEIVER
 from plugins.bqe_ssdv_decoder.integration import SSDV_RECEIVER
 from plugins.bqe_sdr.integration import SDR_RECEIVER, enabled as sdr_enabled, effective_config
+from plugins.pass_audio import PASS_AUDIO, pass_program, recording_requested
+from plugins.runtime_status import running_plugins, program_label
 from plugins.bqe_lrpt_decoder.integration import LRPT_RECEIVER, enabled as lrpt_enabled
 
 
@@ -1226,10 +1236,8 @@ def main():
             yaml_radio_type = radio_config.get("radio_type")
             yaml_radio_port = radio_config.get("radio_port")
             yaml_radio_baud = radio_config.get("radio_baud")
-            print("line 993 yaml_radio_type is ", yaml_radio_type)
             yaml_radio_ft736r_intermediate_frequency_mhz = radio_config.get("radio_ft736r_intermediate_frequency_mhz")
-            print(f"{timestamp_utc} Loaded radio config from {rig_config_path}: "
-                  f"radio_type={yaml_radio_type}, radio_port={yaml_radio_port}, radio_baud={yaml_radio_baud}")
+            print(f"{timestamp_utc} Loaded station configuration from {rig_config_path}")
         except FileNotFoundError:
             print(f"{timestamp_utc} Warning: radio config file {rig_config_path} not found. Using CLI/defaults.")
         except Exception as e:
@@ -1247,7 +1255,6 @@ def main():
         else float(yaml_radio_ft736r_intermediate_frequency_mhz or 0)
     )
 
-    print(f"{timestamp_utc} Using radio config: radio_type={radio_type}, radio_port={radio_port}, radio_baud={radio_baud}")
 
     
 
@@ -1256,9 +1263,20 @@ def main():
     proc = None
     pass_program_proc = None
     satellite_config = effective_config(satellite_config, radio_config)
+    recording_requested(satellite_config)
+    program_to_run_during_pass = pass_program(satellite_config)
     use_lrpt = lrpt_enabled(satellite_config)
     use_sdr = sdr_enabled(satellite_config) and not use_lrpt
     sdr_only = use_lrpt or (use_sdr and satellite_config.get('sdr_only') is True)
+    if use_lrpt or use_sdr:
+        sdr_settings = radio_config.get('sdr', {})
+        receiver_kind = 'SDR IQ capture (LRPT)' if use_lrpt else 'SDR audio receiver'
+        print(f"{timestamp_utc} Active receiver: {receiver_kind}; "
+              f"source={sdr_settings.get('source', 'usb')}, device={sdr_settings.get('device', '0')}; "
+              f"conventional radio control={'disabled' if sdr_only else 'enabled'}")
+    if not sdr_only:
+        print(f"{timestamp_utc} Active conventional radio control: radio_type={radio_type}, "
+              f"radio_port={radio_port}, radio_baud={radio_baud}")
     if not sdr_only:
         proc = start_rigctld_process(radio_type, radio_port, radio_baud, rigctld_port)
         write_rigctld_pid_file(rigctld_pid_file, proc.pid)
@@ -1266,7 +1284,7 @@ def main():
     try:
         # Open IQ capture before decoders subscribe to its demodulated audio.
         sdr_pass_config = dict(satellite_config, downlink_frequency_mhz=downlink_frequency_mhz,
-                               downlink_mode=downlink_mode)
+                               downlink_mode=downlink_mode, tle_file=tle_file)
         if use_lrpt:
             LRPT_RECEIVER.start(sdr_pass_config, satellite_name, radio_config=radio_config)
         else:
@@ -1288,11 +1306,17 @@ def main():
         if agc is not None and not sdr_only:
             rig.rigctld_set_agc(agc, rigctld_port)
 
-        for receiver in (SSTV_RECEIVER, TELEMETRY_RECEIVER, SSDV_RECEIVER):
+        for receiver in (SSTV_RECEIVER, TELEMETRY_RECEIVER, SSDV_RECEIVER, SO127_RECEIVER, MARMOTSAT_RECEIVER, MONITOR_RECEIVER, LASARSAT_RECEIVER, OTP2_RECEIVER, RS61_RECEIVER, AO123_RECEIVER, APRS_RECEIVER):
             try:
-                receiver.start(satellite_config, satellite_name, radio_config=radio_config)
+                decoder_config = (dict(satellite_config, _aprs_reception_context='satellite_pass')
+                                  if receiver is APRS_RECEIVER else satellite_config)
+                receiver.start(decoder_config, satellite_name, radio_config=radio_config)
             except Exception as exc:
                 print(f'[WARNING] Could not start {receiver.label} reception: {exc}')
+        try:
+            PASS_AUDIO.start(satellite_config, radio_config, use_sdr=use_sdr, use_lrpt=use_lrpt)
+        except Exception as exc:
+            print(f'[WARNING] Could not start pass audio recording: {exc}')
         
         sleep_interval = SLEEP_INTERVAL_SECONDS
         high_elev_sleep_interval = SLEEP_INTERVAL_HIGH_ELEVATION_SECONDS
@@ -1519,6 +1543,10 @@ def main():
                 satellite=satellite_nickname,
                 satellite_name=satellite_name,
                 satellite_type=satellite_type,
+                running_plugins=running_plugins([
+                    ('pass_audio', 'Audio recorder', PASS_AUDIO.process),
+                    ('pass_program', program_label(pass_program_proc), pass_program_proc),
+                ]),
                 tuning_enabled=fdt_enabled if is_linear_satellite else enable_tuning,
                 fdt_enabled=fdt_enabled if is_linear_satellite else False,
                 fdt_recalculation_interval=(
@@ -1686,7 +1714,16 @@ def main():
 
         SSTV_RECEIVER.stop()
         TELEMETRY_RECEIVER.stop()
+        MARMOTSAT_RECEIVER.stop()
+        SO127_RECEIVER.stop()
+        MONITOR_RECEIVER.stop()
+        LASARSAT_RECEIVER.stop()
+        OTP2_RECEIVER.stop()
+        RS61_RECEIVER.stop()
+        AO123_RECEIVER.stop()
+        APRS_RECEIVER.stop()
         SSDV_RECEIVER.stop()
+        PASS_AUDIO.stop() # Release and finalize audio before the SDR bridge closes.
         SDR_RECEIVER.stop()
         LRPT_RECEIVER.stop()
         stop_pass_program(pass_program_proc)
@@ -1702,7 +1739,7 @@ def main():
                 pass
 
 
-    exit(0)
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()

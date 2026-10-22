@@ -37,6 +37,8 @@ class LRPTReceiver(Receiver):
                         if k in ('source','device','gain','ppm','host','tcp_port','library')}
             settings.update(radio_config.get('lrpt',{}))
             settings.update(config.get('lrpt',{}))
+            if config.get('tle_file'):
+                settings['tle_file'] = config['tle_file']
             settings.update(frequency=float(config.get('frequency_hz') or float(config['downlink_frequency_mhz'])*1e6),
                             source_name=str(source_name))
             port = int(settings.pop('port',8773))

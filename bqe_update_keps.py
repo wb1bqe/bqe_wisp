@@ -83,6 +83,7 @@ def main():
     do_update("keps.tmp", marina_url, "a")        # marina
     do_update("keps.tmp", 'https://celestrak.org/NORAD/elements/gp.php?CATNR=59051&FORMAT=3le', "a") # Meteor-M2-4 LRPT
     do_update("keps.tmp", 'https://celestrak.org/NORAD/elements/gp.php?CATNR=66766&FORMAT=3le', "a") # T.MICRO telemetry
+    do_update("keps.tmp", 'https://celestrak.org/NORAD/elements/gp.php?CATNR=67287&FORMAT=3le', "a") # Luca-1
     
 
     remove_blank_lines("keps.tmp", "keps.txt")

@@ -38,8 +38,8 @@ class Settings:
             s.mode = 'NFM'
         if s.source not in ('usb', 'tcp', 'file', 'demo'):
             raise ValueError('Source must be usb, tcp, file, or demo')
-        if s.mode not in ('NFM', 'AM', 'USB', 'LSB', 'CW'):
-            raise ValueError('Supported modes: NFM, AM, USB, LSB, CW')
+        if s.mode not in ('NFM', 'AM', 'USB', 'LSB', 'CW', 'BPSK'):
+            raise ValueError('Supported modes: NFM, AM, USB, LSB, CW, BPSK')
         for key in ('frequency', 'bandwidth', 'deviation', 'audio_gain', 'duration'):
             value = float(getattr(s, key))
             if not math.isfinite(value):
@@ -52,6 +52,8 @@ class Settings:
             raise ValueError('Frequency must be between 1 Hz and 2 GHz; hardware limits also apply')
         if not 500 <= s.bandwidth <= 40000:
             raise ValueError('Channel bandwidth must be 500–40000 Hz')
+        if s.mode == 'BPSK' and not 14000 <= s.bandwidth <= 20000:
+            raise ValueError('BPSK channel bandwidth must be 14000-20000 Hz (16000 recommended)')
         if s.mode in ('USB', 'LSB') and s.bandwidth > 12000:
             raise ValueError('SSB bandwidth must not exceed 12000 Hz')
         if not 100 <= s.deviation <= 20000 or not 0 < s.audio_gain <= 100:

@@ -48,6 +48,7 @@ def handler(session, defaults):
                 self.send_header('X-Audio-Format', 's16le' if wav else 'f32le')
                 self.send_header('X-Audio-Rate', str(AUDIO_RATE))
                 self.send_header('X-Audio-Channels', '1')
+                self.send_header('X-Audio-Source', str(session.snapshot().get('source', 'unknown')))
                 self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
                 if wav:
@@ -80,6 +81,10 @@ def handler(session, defaults):
                     self.reply(200, (ROOT/'index.html').read_bytes(), 'text/html; charset=utf-8')
                 elif path == '/status':
                     self.reply(200, dict(session.snapshot(), instance=defaults.get('_instance')))
+                elif path == '/tuning.js':
+                    self.reply(200, (ROOT/'tuning.js').read_bytes(), 'application/javascript; charset=utf-8')
+                elif path == '/gains.js':
+                    self.reply(200, (ROOT/'gains.js').read_bytes(), 'application/javascript; charset=utf-8')
                 elif path == '/defaults':
                     self.reply(200, defaults)
                 elif path == '/devices':
@@ -115,11 +120,14 @@ def handler(session, defaults):
                     session.stop()
                 elif self.path == '/tune':
                     session.tune(options['frequency'])
+                elif self.path == '/gains':
+                    self.reply(200, dict(ok=True, **session.set_gains(options)))
+                    return
                 else:
                     self.reply(404, {'error': 'Not found'})
                     return
                 self.reply(200, {'ok': True})
-            except (ValueError, TypeError, KeyError, OSError) as exc:
+            except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
                 self.reply(400, {'error': str(exc)})
     return Handler
 
@@ -130,7 +138,7 @@ def parse_args(argv=None):
     parser.add_argument('--frequency', type=float, help='Desired receive frequency in Hz')
     parser.add_argument('--center', type=float, help='RF center frequency in Hz; normally chosen automatically')
     parser.add_argument('--sample-rate', type=int)
-    parser.add_argument('--mode', choices=('FM', 'NFM', 'AM', 'USB', 'LSB', 'CW'))
+    parser.add_argument('--mode', choices=('FM', 'NFM', 'AM', 'USB', 'LSB', 'CW', 'BPSK'))
     parser.add_argument('--bandwidth', type=float)
     parser.add_argument('--deviation', type=float)
     parser.add_argument('--audio-gain', type=float)

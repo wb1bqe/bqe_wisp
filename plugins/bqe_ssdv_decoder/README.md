@@ -1,4 +1,110 @@
-# BQE SSDV decoder — RS61 / 239ALFEROV
+# BQE digital image decoder — UMKA-1, Geoscan, RS61 and SO-127
+
+
+## UMKA-1 and Geoscan profiles
+
+Select a Profile in the decoder console, pass `--profile` on the command line,
+or set `ssdv_profile` alongside `decode_ssdv_images: true` in satellites.yaml.
+
+| Profile | Supported digital image transport |
+| --- | --- |
+| `umka-1` | RS40S USP JPEG file transfer, automatically trying 2400/4800/9600 baud with convolutional and Reed–Solomon error correction |
+| `geoscan` | Geoscan v1 (64-byte payload) and v2 (72-byte payload), uncoded 9600-baud GFSK with PN9 and CRC |
+| `rs61` | Existing RS61 / 239ALFEROV Geoscan v2 profile (default, unchanged) |
+| `hades-sa` | SO-127 SSDV at 200/800/1600 baud |
+
+UMKA-1's digital images use **USP**, not the fsphil SSDV format. They are handled
+here so all digital image receptions share the same controls and gallery. The
+existing `umka-1` satellite entry now selects this profile automatically at
+437.625 MHz; its scheduling and other decoder choices are preserved. Its separate
+Robot36 SSTV broadcasts still require `decode_sstv_images: true` when desired.
+
+UMKA-1 KISS imports contain AX.25-encapsulated USP records, without an AX.25 FCS;
+live audio is accepted only after USP FEC validation. The receiver handles INIT,
+FILESIZE and offset-addressed DATA records, keeps satellite channels separate,
+checks bounds, and marks missing/conflicting image data as incomplete. Public
+RS40S INIT/DATA session-byte differences are handled. Transmitted filenames are
+metadata and never used as local paths. Non-JPEG files such as original telescope
+FITS data remain recoverable in the packet log but are not rendered by this plugin.
+19200-baud USP is not supported by this profile.
+
+The general Geoscan profile recognizes the published satellite IDs for
+Geoscan-Edelveis, StratoSat-TK1 and the v2 family (including RS61), and keeps
+satellite/file IDs separate. v1 needs the image-start/JPEG-header packet to turn
+memory addresses into file offsets. Packets received before that remain in the
+KISS log for replay; v2 fragments can be assembled out of order. Both frame sizes
+are tried automatically. **Convolutionally coded Geoscan modes are not supported**.
+Select the profile to match the satellite's actual downlink mode.
+
+Both profiles use configured SDR audio or conventional-radio discriminator/DATA
+audio on Windows and Linux (Python 3.10+). No external modem is needed. KISS imports
+trust the original demodulator's validation, while audio reception validates FEC
+or CRC before logging packets. Existing Geoscan KISS logs also replay through the
+new profile. No new Python dependencies were added.
+
+Validation includes an independent public RS40S capture (one complete 480×480 JPEG),
+synthetic noisy USP audio at all three supported rates, both Geoscan frame sizes,
+polarity/sample-rate variations, malformed records, gaps, conflicts and duplicate
+packets. All three new format paths also recover pixel-identical complete images
+from simulated unsigned 8-bit RTL-SDR IQ at 960 kHz, through BQE's actual tuning,
+channel filtering and FM demodulation with the configured 0.15 audio gain. This
+offline check is included in Help → Perform environment diagnostics when plugin
+self-tests are selected. On-air reception with this workstation has not yet been verified.
+
+```yaml
+decode_ssdv_images: true
+ssdv_profile: umka-1 # or geoscan, rs61, hades-sa
+record_audio: true
+```
+
+## SO-127 / HADES-SA / SpinnyONE
+
+The `so-127-ssdv` entry in `bqe_config/satellites.yaml` enables automatic
+scheduling for NORAD **68446**, **436.875 MHz**, and selects
+`decode_ssdv_images: true` with `ssdv_profile: hades-sa`. Its receive-only
+configuration uses 12 kHz FM bandwidth and flat discriminator audio. The shared
+`record_audio: true` setting saves lossless WAV audio in the configured sound-recorder
+folder for replay (see [pass recording](../PASS_RECORDING.md)).
+Normal scheduling priorities, elevation limits, and overlapping passes apply.
+Its orbit is already present in `keps.txt` and in the AMSAT TLE feed used by
+the normal orbit update.
+
+The HADES profile automatically tries 200, 800, and 1600 baud, both polarities,
+validates normal 256-byte SSDV packets using Reed–Solomon correction and CRC32,
+and renders JPEGs with Philip Heron's SSDV utility. Validated packets are saved
+as KISS files; images and metadata appear in **View → SSTV Gallery**. Reordered
+and duplicate packets are supported. Missing packets produce partial images;
+only a gap-free sequence with an end packet is marked complete. Partial images
+are rendered when reception stops. This profile does not decode CODEC2,
+telemetry, no-FEC SSDV, or USB-demodulated audio tones. For conventional radios,
+use flat FM discriminator output, not narrow voice audio.
+
+SO-127 telemetry runs alongside this image profile using the dedicated
+[`bqe_so127_decoder`](../bqe_so127_decoder/README.md) plugin and
+`decode_so127_telemetry: true` in the same satellite entry.
+
+Select **SO-127 / HADES-SA** in the plugin's Profile control for manual file
+decoding, or use `--profile hades-sa`. Scheduled passes select it automatically.
+The existing RS61 profile remains the default.
+
+Windows includes the source-built `vendor/ssdv/ssdv.exe` (pinned revision and build hashes included). Linux needs
+the portable utility compiled for that machine (including ARM Raspberry Pi):
+
+```sh
+sudo apt install build-essential
+python3 plugins/bqe_ssdv_decoder/vendor/ssdv/build.py --target linux
+```
+
+The Linux launcher also builds it if gcc is available. Missing tools
+produce an explicit error for HADES image decoding; they do not affect RS61.
+See `vendor/ssdv/README-BQE.md` for sources and licensing.
+
+Validated with the operator's reference packet, synthetic noisy audio at all
+three rates, the actual BQE SDR IQ-to-audio path, and upstream SSDV encoder /
+decoder roundtrips on Windows and Linux. Live SO-127 pass reception has not yet
+been verified.
+
+## RS61 / 239ALFEROV
 
 Receives RS61 Geoscan digital-image packets from live radio audio or a recording.
 It provides the same capture controls, channel selection, 44.1/48 kHz options,
@@ -59,7 +165,8 @@ Add to a supported satellite entry or preset:
 decode_ssdv_images: true
 ```
 
-The input comes from `radio_soundcard` in `bqe_config/my_rig.yaml`. The plugin
+The input comes from the SDR audio bridge when using an SDR, otherwise from
+`radio_soundcard` in `bqe_config/my_rig.yaml`. The plugin
 starts after tuning, opens its controls at **http://127.0.0.1:8771** (or a free
 port if occupied), and stops when the pass/preset ends. It can run alongside
 the SSTV and telemetry receivers, using their shared-mode audio capture.

@@ -16,7 +16,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent.parent))
 from plugins.bqe_ssdv_decoder.service import Session, devices, gallery_settings
-from plugins.decoder_http import DecoderServer
+from plugins.decoder_http import DecoderServer, decoder_page
 
 
 def handler(session, defaults):
@@ -45,9 +45,11 @@ def handler(session, defaults):
                 return
             try:
                 if self.path == '/':
-                    self.reply(200, (ROOT / 'index.html').read_bytes(), 'text/html; charset=utf-8')
+                    self.reply(200, decoder_page((ROOT / 'index.html')), 'text/html; charset=utf-8')
                 elif self.path == '/status':
                     self.reply(200, session.snapshot())
+                elif self.path == '/defaults':
+                    self.reply(200, {k: defaults.get(k) for k in ('profile', 'device')})
                 elif self.path == '/devices':
                     self.reply(200, devices())
                 elif self.path.split('?', 1)[0] == '/preview.jpg':
@@ -128,6 +130,7 @@ def main():
     parser.add_argument('--file', type=Path, help='Decode WAV/MP3/OGG/FLAC audio or Geoscan KISS packets')
     parser.add_argument('--device', '--input-device', help='SoundCard input or loopback device ID/name')
     parser.add_argument('--list-devices', action='store_true')
+    parser.add_argument('--profile', choices=('rs61', 'hades-sa', 'umka-1', 'geoscan'), default='rs61')
     parser.add_argument('--sample-rate', type=int, default=48000)
     parser.add_argument('--channel', type=int, default=0, help='Zero-based input channel (default: 0)')
     parser.add_argument('--output', type=Path, help='Override the configured SSTV Gallery directory')

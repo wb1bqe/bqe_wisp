@@ -10,6 +10,9 @@ import uuid
 from plugins.bqe_sstv_decoder.integration import Receiver
 
 ROOT = Path(__file__).resolve().parent
+# Windows cold starts can spend more than 12 seconds loading SciPy and USB
+# drivers before the local status server becomes available.
+STARTUP_TIMEOUT = 60 if os.name == 'nt' else 12
 
 
 def effective_config(config, radio_config=None):
@@ -61,13 +64,32 @@ class SDRReceiver(Receiver):
             if 'port' in overrides:
                 raise ValueError('Set the SDR port in my_rig.yaml only, so every decoder uses the same audio endpoint')
             settings.update(overrides)
+            if 'record_audio' in config:
+                from plugins.pass_audio import recording_requested
+                recording_requested(config) # Validate before opening the receiver.
+                # A single shared recorder owns explicitly requested pass WAVs.
+                settings['record_audio'] = False
             frequency = float(config.get('frequency_hz') or float(config['downlink_frequency_mhz'])*1e6)
             mode = str(config.get('mode') or config.get('downlink_mode', 'NFM')).upper()
             settings.update(frequency=frequency, mode=mode, source_name=str(source_name))
-            settings.setdefault('bandwidth', float(config.get('bandwidth') or (3000 if mode in ('USB', 'LSB') else 25000)))
+            if 'bandwidth' not in settings:
+                bandwidth = float(config.get('bandwidth') or (3000 if mode in ('USB', 'LSB') else 16000 if mode == 'BPSK' else 25000))
+                # Conventional-radio filter settings can exceed the SDR audio
+                # demodulator's SSB limit. Adapt only this inherited setting;
+                # an explicit sdr.bandwidth must still be validated as entered.
+                if mode in ('USB', 'LSB') and 12000 < bandwidth <= 40000:
+                    print(f'[WARNING] {source_name}: using SDR SSB bandwidth 12000 Hz '
+                          f'instead of inherited radio bandwidth {bandwidth:g} Hz')
+                    bandwidth = 12000
+                settings['bandwidth'] = bandwidth
             port = int(settings.pop('port', 8772))
             if not 1 <= port <= 65535:
                 raise ValueError('SDR control port must be 1–65535')
+            from .config import Settings
+            try:
+                Settings.from_dict(settings)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f'Invalid SDR settings for {source_name}: {exc}') from exc
             local = ROOT/'.venv'/('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
             command = [str(local) if local.exists() else sys.executable, str(ROOT/'bqe_sdr.py'),
                        '--managed', '--port', str(port)]
@@ -90,7 +112,7 @@ class SDRReceiver(Receiver):
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
             self.process = subprocess.Popen(command, **kwargs)
             try:
-                deadline = time.monotonic()+12
+                deadline = time.monotonic()+STARTUP_TIMEOUT
                 while time.monotonic() < deadline:
                     if self.process.poll() is not None:
                         raise RuntimeError('SDR process exited; run its launcher to inspect driver/settings errors')
@@ -108,7 +130,8 @@ class SDRReceiver(Receiver):
                     if state['state'] == 'error':
                         raise RuntimeError(state['error'])
                     time.sleep(.1)
-                raise RuntimeError('SDR startup timed out')
+                raise RuntimeError(f'SDR startup timed out after {STARTUP_TIMEOUT} seconds; '
+                                   'check the SDR launcher for driver/settings errors')
             except Exception:
                 self.stop()
                 raise

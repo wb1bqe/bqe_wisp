@@ -1,0 +1,8 @@
+# Applied in order, ignoring case. Use single quotes to preserve regex backslashes.
+# Add more pattern/replacement entries below. Use [] to disable all rules.
+- pattern: '\bkilling\b'
+  replacement: 'kilo'
+- pattern: '\bhusky\b'
+  replacement: 'Whiskey'
+- pattern: '\bcoal\b'
+  replacement: 'call'

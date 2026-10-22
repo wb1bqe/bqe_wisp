@@ -1,0 +1,12 @@
+nickname: "2m_aprs"
+channel_name: "2m APRS"  # type: "SSB"
+frequency_hz: "144390000"
+mode: "FM"
+agc: medium
+squelch_level: 0
+bandwidth: "15000"
+decode_aprs: true
+#aprs_bauds: [1200]
+
+
+

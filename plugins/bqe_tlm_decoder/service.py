@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Capture/file lifecycle and durable, bounded packet storage."""
 from collections import deque
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 import queue
@@ -9,7 +10,8 @@ import uuid
 
 import numpy as np
 import soundfile as sf
-import soundcard as sc  # Import on startup before worker threads initialize COM.
+from plugins.audio_devices import soundcard_backend
+sc = soundcard_backend()
 
 from .dsp import AudioDecoder
 from .protocols import kiss_encode
@@ -24,8 +26,10 @@ def devices():
 
 
 class Session:
-    def __init__(self, output):
+    def __init__(self, output, decoder_factory=None, save_kiss=True):
         self.output = Path(output).resolve()
+        self.decoder_factory = decoder_factory
+        self.save_kiss = save_kiss
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread = None
@@ -43,6 +47,7 @@ class Session:
             self.stop_event.clear()
             self.packets.clear()
             self.status = dict(state='starting', packets=0, error=None,
+                               input_device=options.get('device') or '',
                                source=options.get('source_name') or (Path(file).name if file else 'Live audio'), audio_seconds=0)
             self.thread = threading.Thread(target=self._run, args=(dict(options), file, cleanup), daemon=True)
             self.thread.start()
@@ -60,42 +65,49 @@ class Session:
             stem = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
             log = self.output / (stem + '.jsonl')
             kiss = self.output / (stem + '.kiss')
-            with log.open('w', encoding='utf-8') as records, kiss.open('wb') as binary:
+            with log.open('w', encoding='utf-8') as records, \
+                    (kiss.open('wb') if self.save_kiss else nullcontext()) as binary:
                 def emit(packet):
                     packet.update(decoded_at=datetime.now(timezone.utc).isoformat(),
                                   input_source=options.get('source_name') or (Path(file).name if file else 'live'))
                     records.write(json.dumps(packet) + '\n')
                     records.flush()
-                    binary.write(kiss_encode(bytes.fromhex(packet['frame_hex'])))
-                    binary.flush()
+                    if binary is not None:
+                        binary.write(kiss_encode(bytes.fromhex(packet['frame_hex'])))
+                        binary.flush()
                     with self.lock:
                         self.packets.append(packet)
                         self.status['packets'] += 1
 
                 def consume(blocks, rate, total=None):
-                    decoder = AudioDecoder(rate, emit, options.get('bauds', [1200, 2400, 4800, 9600]),
-                                           options.get('protocol', 'auto'))
+                    decoder = (self.decoder_factory(rate, emit, options) if self.decoder_factory else
+                               AudioDecoder(rate, emit, options.get('bauds', [1200, 2400, 4800, 9600]),
+                                            options.get('protocol', 'auto')))
                     channel = int(options.get('channel', 0))
                     count = 0
                     with self.lock:
                         self.status.update(state='running', sample_rate=rate, bauds=decoder.bauds,
-                                           skipped_bauds=decoder.skipped_bauds, log=str(log), kiss=str(kiss))
+                                           skipped_bauds=decoder.skipped_bauds, log=str(log),
+                                           kiss=str(kiss) if self.save_kiss else None)
                     for block in blocks:
                         if self.stop_event.is_set():
                             break
                         if channel < 0 or channel >= block.shape[1]:
                             raise ValueError(f'Channel {channel} unavailable; source has {block.shape[1]} channel(s)')
-                        audio = block[:, channel]
+                        audio = (decoder.select_samples(block, channel) if hasattr(decoder, 'select_samples')
+                                 else block[:, channel])
                         decoder.push(audio)
                         count += len(audio)
                         with self.lock:
                             self.status.update(audio_seconds=count / rate,
                                                progress=count / total if total else None,
-                                               level_dbfs=float(20 * np.log10(max(1e-9, np.sqrt(np.mean(audio**2))))),
+                                               level_dbfs=float(20 * np.log10(max(1e-9, np.sqrt(np.mean(np.abs(audio)**2))))),
                                                clipping=bool(np.any(np.abs(audio) >= .999)),
                                                diagnostics=decoder.diagnostics())
                     if not self.stop_event.is_set():
                         decoder.finish()
+                        with self.lock:
+                            self.status['diagnostics'] = decoder.diagnostics()
 
                 if file:
                     with sf.SoundFile(file) as audio:
@@ -112,10 +124,13 @@ class Session:
                                 source = input_device(sc, device)
                                 with self.lock:
                                     self.status['device'] = source.name if source is not None else device
+                                    self.status['device_id'] = getattr(source, 'id', device)
                                 if source is None:
                                     raise ValueError('No audio input device is available')
                                 # Capture all channels: WASAPI mono capture can return corrupt data.
                                 with input_recorder(source, samplerate=rate) as recorder:
+                                    if hasattr(self, 'input_ready'):
+                                        self.input_ready(source, recorder)
                                     while not self.stop_event.is_set():
                                         data = recorder.record(numframes=2048)
                                         try:

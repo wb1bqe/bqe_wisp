@@ -1,0 +1,15 @@
+nickname: 40m_ssdv
+channel_name: 40m_ssdv
+type: SSDV
+frequency_hz: 7058000
+mode: LSB
+repeater_offset_khz: 0
+repeater_shift: 0
+ctcss_tone: 0
+bandwidth: 3000
+power: 10
+squelch_level: 0.1
+agc: medium
+decode_hf_images: true
+hf_image_profile: auto
+program_to_run_while_waiting: ''

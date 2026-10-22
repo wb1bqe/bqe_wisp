@@ -14,6 +14,7 @@ body{font:16px system-ui;background:#101923;color:#e6edf5;margin:32px auto;paddi
 <label>Channel <input id="channel" type="number" min="0" max="31" value="0" style="width:75px"></label>
 <label>Sample rate <select id="sampleRate"><option value="48000">48,000 Hz</option><option value="44100">44,100 Hz</option></select></label>
 <div><button id="live">Start live audio</button><button id="stop" disabled>Stop and save partial image</button></div>
+<label><input id="combineFragments" type="checkbox"> Combine matching repeated images (save an extra composite)</label>
 <hr><label>Recording <input id="file" type="file" accept=".mp3,.wav"></label><button id="decode">Decode file</button>
 <p><small>Choose your radio input, virtual audio cable, or speaker loopback. Channel 0 is the first channel. Keep squelch open and avoid audio clipping. Recording uploads are limited to 512 MiB.</small></p>
 </section>
@@ -37,17 +38,28 @@ function drawSignal(s){
  const w=$('waveform'),wc=w.getContext('2d');wc.clearRect(0,0,w.width,w.height);wc.strokeStyle='#35495d';wc.beginPath();wc.moveTo(0,w.height/2);wc.lineTo(w.width,w.height/2);wc.stroke();
  const peak=Math.max(.0001,...signal.waveform.map(Math.abs));wc.strokeStyle=s.clipping?'#ff8b81':'#75bbff';wc.lineWidth=1.5;wc.beginPath();signal.waveform.forEach((value,i)=>{const x=i/(signal.waveform.length-1)*w.width,y=w.height/2-value/peak*w.height*.44;i?wc.lineTo(x,y):wc.moveTo(x,y)});wc.stroke();$('waveDuration').textContent=signal.waveform_ms.toFixed(0)+' ms';
 }
-function options(){return {device:$('device').value,channel:Number($('channel').value),sample_rate:Number($('sampleRate').value)}}
-async function request(path,init){const r=await fetch(path,init);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
+let deviceInitialized=false;
+$('device').addEventListener('change',()=>{deviceInitialized=true});
+function syncDevice(s){
+ if(deviceInitialized||s.input_device==null)return;
+ const value=s.device_id||s.input_device,select=$('device');
+ if(value&&!Array.from(select.options).some(o=>o.value===value)){
+  const option=document.createElement('option');option.value=value;option.textContent=s.device||value;select.append(option);
+ }
+ select.value=value;
+ deviceInitialized=true;
+}
+function options(){return {combine_fragments:$('combineFragments').checked,device:$('device').value,channel:Number($('channel').value),sample_rate:Number($('sampleRate').value)}}
+async function request(path,init){const r=await BqePluginPage.fetch(path,init);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
 async function action(fn){$('error').textContent='';busy=true;$('live').disabled=$('decode').disabled=true;try{await fn()}catch(e){$('error').textContent=e.message}finally{busy=false;await refresh()}}
 $('live').onclick=()=>action(()=>request('/live',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}));
 $('stop').onclick=()=>action(()=>request('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}));
 $('decode').onclick=()=>action(async()=>{const file=$('file').files[0];if(!file)throw Error('Choose an MP3 or WAV file first');if(file.size>512*1024*1024)throw Error('Use --file on the command line for files larger than 512 MiB');await request('/file',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name),'X-Options':JSON.stringify(options())},body:file})});
-async function refresh(){try{const s=await request('/status');const active=['starting','running','stopping'].includes(s.state);$('state').textContent=s.state;$('live').disabled=$('decode').disabled=active||busy;$('stop').disabled=!active||s.state==='stopping';$('status').textContent=`${s.source||''} · ${s.images} images saved · ${(s.audio_seconds||0).toFixed(1)} seconds`+(s.device?' · '+s.device:'')+(s.mode?` · ${s.mode.replaceAll('_',' ')}`:'')+(s.level_dbfs!=null?` · ${s.level_dbfs.toFixed(1)} dBFS`:'')+(s.clipping?' · Clipping: lower input gain':'');$('reception').textContent=s.reception||'';$('folder').textContent='Saving to: '+s.output;$('progress').hidden=s.progress==null;$('progress').value=s.progress||0;$('gallery').hidden=!s.gallery_url;if(s.gallery_url)$('gallery').href=s.gallery_url;if(s.error||s.warning)$('error').textContent=s.error||s.warning;
+async function refresh(){try{const s=await request('/status');syncDevice(s);const active=['starting','running','stopping'].includes(s.state);$('state').textContent=s.state;$('live').disabled=$('decode').disabled=active||busy;$('stop').disabled=!active||s.state==='stopping';$('status').textContent=`${s.source||''} · ${s.images} images saved · ${(s.audio_seconds||0).toFixed(1)} seconds`+(s.device?' · '+s.device:'')+(s.mode?` · ${s.mode.replaceAll('_',' ')}`:'')+(s.level_dbfs!=null?` · ${s.level_dbfs.toFixed(1)} dBFS`:'')+(s.clipping?' · Clipping: lower input gain':'');$('reception').textContent=s.reception||'';$('folder').textContent='Saving to: '+s.output;$('progress').hidden=s.progress==null;$('progress').value=s.progress||0;$('gallery').hidden=!s.gallery_url;if(s.gallery_url)$('gallery').href=s.gallery_url;if(s.error||s.warning)$('error').textContent=s.error||s.warning;
 $('previewSection').hidden=!s.has_preview;if(s.has_preview&&s.preview_version!==previewVersion){previewVersion=s.preview_version;$('preview').src='/preview.jpg?v='+previewVersion;$('previewStatus').textContent=(s.mode||'SSTV').replaceAll('_',' ')+' · '+(s.preview_complete?'Complete image':active?'Receiving — updates about every 2 seconds':'Partial image');}
 drawSignal(s);
-const key=JSON.stringify(s.recent);if(key!==lastImages){lastImages=key;$('empty').hidden=s.recent.length>0;$('images').replaceChildren(...s.recent.slice().reverse().map(p=>{const f=document.createElement('figure'),a=document.createElement('a'),img=document.createElement('img'),c=document.createElement('figcaption');a.href='/image/'+encodeURIComponent(p.filename);a.target='_blank';a.rel='noopener';img.src=a.href;img.alt=p.mode+' decoded image';a.append(img);c.textContent=`${p.mode.replaceAll('_',' ')} · ${p.width}×${p.height} · ${p.complete?'Complete transmission':'Partial transmission'} — ${p.filename}`;f.append(a,c);return f}))}}catch(e){$('error').textContent='Connection: '+e.message}}
-request('/devices').then(ds=>ds.forEach(d=>{const o=document.createElement('option');o.value=d.id;o.textContent=d.name+(d.loopback?' (loopback)':'');$('device').append(o)})).catch(e=>$('error').textContent='Audio devices: '+e.message);
-async function poll(){await refresh();setTimeout(poll,250)}poll();
+const key=JSON.stringify(s.recent);if(key!==lastImages){lastImages=key;$('empty').hidden=s.recent.length>0;$('images').replaceChildren(...s.recent.slice().reverse().map(p=>{const f=document.createElement('figure'),a=document.createElement('a'),img=document.createElement('img'),c=document.createElement('figcaption');a.href='/image/'+encodeURIComponent(p.filename);a.target='_blank';a.rel='noopener';img.src=a.href;img.alt=p.mode+' decoded image';a.append(img);c.textContent=`${p.mode.replaceAll('_',' ')} · ${p.width}×${p.height} · ${p.composite_sources?'Composite ('+p.composite_sources.length+' receptions)':p.complete?'Complete transmission':'Partial transmission'} — ${p.filename}`;f.append(a,c);return f}))}}catch(e){$('error').textContent='Connection: '+e.message}}
+request('/devices').then(ds=>ds.forEach(d=>{if(Array.from($('device').options).some(o=>o.value===d.id))return;const o=document.createElement('option');o.value=d.id;o.textContent=d.name+(d.loopback?' (loopback)':'');$('device').append(o)})).catch(e=>$('error').textContent='Audio devices: '+e.message);
+BqePluginPage.poll(refresh,250);
 </script></html>
 

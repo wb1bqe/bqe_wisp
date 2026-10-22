@@ -40,8 +40,12 @@ MASK = pn9_mask(FRAME_SIZE)
 
 class Framer:
     """Bounded synchronization candidates; accept only CRC-validated packets."""
-    def __init__(self, emit):
+    def __init__(self, emit, frame_size=FRAME_SIZE):
+        if frame_size not in (66, 74):
+            raise ValueError('Geoscan frames must contain 64 or 72 payload bytes plus CRC')
         self.emit = emit
+        self.frame_size = frame_size
+        self.mask = pn9_mask(frame_size)
         self.shift = 0
         self.bits_seen = 0
         self.candidates = []
@@ -53,10 +57,10 @@ class Framer:
         remaining = []
         for polarity, bits in self.candidates:
             bits.append(bit ^ polarity)
-            if len(bits) == FRAME_SIZE * 8:
+            if len(bits) == self.frame_size * 8:
                 raw = bytes(sum(bits[i+j] << (7-j) for j in range(8))
                             for i in range(0, len(bits), 8))
-                frame = bytes(a ^ b for a, b in zip(raw, MASK))
+                frame = bytes(a ^ b for a, b in zip(raw, self.mask))
                 if crc16(frame[:-2]) == int.from_bytes(frame[-2:], 'big'):
                     self.emit(frame[:-2], when)
                 else:

@@ -148,3 +148,8 @@ audio** subscribes to the running BQE SDR receiver at its configured port using
 Start an SDR idle preset first. The menu recording retains its configured MP3
 bitrate and recordings folder, and stops automatically when a pass starts.
 Conventional radio stations continue using the configured pass recorder input.
+
+## Scheduled passes
+
+Use the satellite-level `record_audio: true` setting for radio-independent pass
+recording. See [pass recording configuration](../PASS_RECORDING.md).

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BQE MARMOTSat UHF Decoder</title>
+<style>
+body{font:16px system-ui;background:#101923;color:#e6edf5;margin:32px auto;padding:0 24px;max-width:1100px}h1{font-size:28px}section{background:#1b2836;padding:20px;border-radius:10px;margin:18px 0}label{display:inline-block;margin:8px}button,select,input{font:inherit;padding:8px;border-radius:5px}button{cursor:pointer;background:#75bbff;color:#102030;border:0;margin:6px}button:disabled{opacity:.5;cursor:wait}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:9px;border-bottom:1px solid #35485a}pre{white-space:pre-wrap;overflow-wrap:anywhere}#error{color:#ffb0a8}small{color:#b6c8d9}.active{color:#75bbff}tr[data-i]{cursor:pointer}tr[data-i]:hover{background:#30475b}
+</style>
+<h1>BQE MARMOTSat UHF Decoder</h1>
+<p>436.125 MHz · uncoded 2-FSK · PN9 / OpenLST · 10.17 kbps</p>
+<section>
+<label>Audio input <select id="device"><option value="">Default input</option></select></label>
+<label>Channel <input id="channel" type="number" min="0" max="31" value="0" style="width:60px"></label>
+<label>Baud <input id="baud" type="number" min="10000" max="10350" step="0.1" value="10170"></label>
+<button id="live">Start live audio</button><button id="stop">Stop</button>
+<hr><input id="file" type="file" accept=".mp3,.wav,.flac,.ogg"><button id="decode">Decode file</button>
+<p><small>Use flat DATA/9600-baud or FM discriminator audio at 48 kHz or higher, with roughly 25 kHz RF bandwidth and squelch off. Narrow speaker audio is unsuitable. Prefer WAV/FLAC. UHF telemetry is normally active only during contacts with the Victoria ground station.</small></p>
+</section>
+<p id="error" role="alert"></p><section><strong id="state">Idle</strong><p id="status"></p><p id="logs"></p><p id="diagnostics"></p></section>
+<section><h2>Validated packets</h2><p><small>Select a packet for fields and raw data. The latest 200 are shown; all packets are saved as JSONL. Payload fields remain raw until a mission-specific schema is available. This implementation has synthetic validation; an over-the-air MARMOTSat capture is still needed.</small></p><table><thead><tr><th>Audio time</th><th>Hardware ID / sequence</th><th>Format</th><th>Baud</th></tr></thead><tbody id="packets"></tbody></table><pre id="detail"></pre></section>
+<script>
+const $=id=>document.getElementById(id);let packets=[],busy=false;
+let deviceInitialized=false;
+$('device').addEventListener('change',()=>{deviceInitialized=true});
+function syncDevice(s){
+ if(deviceInitialized||s.input_device==null)return;
+ const value=s.device_id||s.input_device,select=$('device');
+ if(value&&!Array.from(select.options).some(o=>o.value===value)){
+  const option=document.createElement('option');option.value=value;option.textContent=s.device||value;select.append(option);
+ }
+ select.value=value;
+ deviceInitialized=true;
+}
+function options(){return {device:$('device').value,channel:Number($('channel').value),baud:Number($('baud').value)}}
+async function request(path,init){const r=await BqePluginPage.fetch(path,init);const d=await r.json();if(!r.ok)throw Error(d.error||r.statusText);return d}
+async function action(fn){$('error').textContent='';busy=true;try{await fn()}catch(e){$('error').textContent=e.message}finally{busy=false;refresh()}}
+$('live').onclick=()=>action(()=>request('/live',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}));
+$('stop').onclick=()=>action(()=>request('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}));
+$('decode').onclick=()=>action(async()=>{const file=$('file').files[0];if(!file)throw Error('Choose an audio file first');await request('/file',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name),'X-Options':JSON.stringify(options())},body:file})});
+$('packets').onclick=e=>{const row=e.target.closest('tr[data-i]');if(row)$('detail').textContent=JSON.stringify(packets[Number(row.dataset.i)],null,2)};
+async function refresh(){try{const s=await request('/status');syncDevice(s);const active=['starting','running','stopping'].includes(s.state);$('state').textContent=(active?'● ':'')+s.state;$('state').className=active?'active':'';$('live').disabled=$('decode').disabled=active||busy;$('stop').disabled=!active;$('status').textContent=`${s.source||''} · ${s.packets} packets · ${(s.audio_seconds||0).toFixed(1)} seconds`+(s.device?' · '+s.device:'')+(s.progress!=null?` · ${(100*s.progress).toFixed(0)}%`:'')+(s.level_dbfs!=null?` · ${s.level_dbfs.toFixed(1)} dBFS`:'')+(s.clipping?' · Audio clipping: lower input gain':'')+(s.skipped_bauds?.length?` · Sample rate too low for: ${s.skipped_bauds.join(', ')}`:'');$('logs').textContent=s.log?`Saved: ${s.log}`:'';$('diagnostics').textContent=s.diagnostics?`Sync candidates: ${s.diagnostics.sync_candidates} · CRC failures: ${s.diagnostics.bad_crc} · Incomplete candidates: ${s.diagnostics.truncated_candidates}`:'';if(s.error)$('error').textContent=s.error;packets=s.recent.slice().reverse();$('packets').replaceChildren(...packets.map((p,i)=>{const tr=document.createElement('tr');tr.dataset.i=i;for(const v of [p.audio_seconds.toFixed(3),p.hardware_id+' / '+p.sequence,p.protocol,p.baud]){const td=document.createElement('td');td.textContent=v;tr.append(td)}return tr}))}catch(e){$('error').textContent='Connection: '+e.message}}
+request('/devices').then(ds=>ds.forEach(d=>{if(Array.from($('device').options).some(o=>o.value===d.id))return;const o=document.createElement('option');o.value=d.id;o.textContent=d.name+(d.loopback?' (loopback)':'');$('device').append(o)})).catch(e=>$('error').textContent=e.message);
+BqePluginPage.poll(refresh,1000);
+</script></html>

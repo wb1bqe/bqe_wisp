@@ -23,6 +23,7 @@ class Options:
     decode_timeout: int = 1800
     min_free_mb: int = 512
     source_name: str = 'Meteor LRPT'
+    tle_file: str = ''
 
     @classmethod
     def from_dict(cls, values):

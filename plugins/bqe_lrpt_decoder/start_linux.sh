@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")"
 if [ ! -x .venv/bin/python ]; then python3 -m venv .venv; fi
-if ! .venv/bin/python -c 'import numpy,yaml' >/dev/null 2>&1; then
+if ! .venv/bin/python -c 'import numpy,yaml,sgp4,PIL' >/dev/null 2>&1; then
     .venv/bin/python -m pip install -r requirements.txt
 fi
 if [ "$#" -eq 0 ]; then set -- --idle --open-browser; fi

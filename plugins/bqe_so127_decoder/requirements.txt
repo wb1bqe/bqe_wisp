@@ -1,0 +1,2 @@
+-r ../bqe_tlm_decoder/requirements.txt
+PyYAML>=6,<7

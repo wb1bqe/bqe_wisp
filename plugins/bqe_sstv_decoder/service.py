@@ -10,7 +10,8 @@ import uuid
 
 import numpy as np
 import soundfile as sf
-import soundcard as sc  # Import on startup before worker threads initialize COM.
+from plugins.audio_devices import soundcard_backend
+sc = soundcard_backend()
 import yaml
 
 from plugins.audio_devices import audio_com, input_device, input_recorder
@@ -69,10 +70,13 @@ class Session:
 
     def new_decoder(self, rate, options):
         from .decoder import AudioDecoder
-        return AudioDecoder(rate, self._save, self.update, self.preview)
+        return AudioDecoder(rate, self._save, self.update, self.preview,
+                            combine_fragments=bool(options.get("combine_fragments", False)))
 
     def image_metadata(self, image):
-        return {}
+        return {key.removeprefix('sstv_'): image.info[key]
+                for key in ('sstv_recovery', 'sstv_missing_sync', 'sstv_missing_rows', 'sstv_expected_seconds', 'sstv_composite_sources')
+                if key in image.info}
 
     def __init__(self, output, gallery_url=None):
         self.output = Path(output).resolve()
@@ -90,6 +94,32 @@ class Session:
     def update(self, **fields):
         with self.lock:
             self.status.update(fields)
+            if self.image_prefix == 'sstv' and 'header_audio_seconds' in fields:
+                self.status['headers_detected'] = self.status.get('headers_detected', 0) + 1
+                self.log_reception('header detected', mode=fields.get('mode'),
+                                   audio_seconds=fields['header_audio_seconds'],
+                                   detector=fields.get('header_detector'))
+        # Managed passes inherit stdout into the pass log; errors must survive
+        # closure of the short-lived controls window.
+        if fields.get('error'):
+            print(f"[ERROR] {self.image_prefix} decoder: {fields['error']}",flush=True)
+
+    def log_reception(self, event, **fields):
+        """Small durable events, never the waveform/spectrum or every audio block."""
+        if self.image_prefix != 'sstv':
+            return
+        with self.lock:
+            record = dict(timestamp=datetime.now(timezone.utc).isoformat(),
+                          source=self.status.get('source'), **fields)
+        print(f'[INFO] sstv {event}: {json.dumps(record, ensure_ascii=True)}', flush=True)
+
+    def log_summary(self):
+        with self.lock:
+            fields = {key: self.status.get(key) for key in (
+                'state', 'input_device', 'device', 'sample_rate', 'channel',
+                'audio_seconds', 'headers_detected', 'mode', 'images',
+                'reception', 'error', 'warning')}
+        self.log_reception('reception summary', output=str(self.output), **fields)
 
     def snapshot(self):
         with self.lock:
@@ -140,9 +170,11 @@ class Session:
             self.recent.clear()
             self.preview_bytes = None
             self.signal = None
-            self.status = dict(state='starting', images=0, error=None, mode=None,
+            self.status = dict(state='starting', images=0, headers_detected=0, error=None, mode=None,
                                source=options.get('source_name') or (Path(file).name if file else 'Live audio'),
                                channel=channel,
+                               input_device=options.get('device') or '',
+                               profile=options.get('profile'),
                                audio_seconds=0, reception=self.waiting_message)
             self.thread = threading.Thread(target=self._run, args=(dict(options), file, cleanup), daemon=True)
             self.thread.start()
@@ -157,11 +189,13 @@ class Session:
         mode = str(image.info[self.mode_key]).removeprefix('Mode.')
         complete = bool(image.info.get(self.complete_key, False))
         stem = self.image_prefix + '-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ') + '-' + mode
+        stem += '-composite' if 'sstv_composite_sources' in image.info else ''
         stem += ('-partial' if not complete else '') + '-' + uuid.uuid4().hex[:8]
-        destination = self.output / (stem + '.jpg')
+        lossless = self.image_prefix == 'sstv'
+        destination = self.output / (stem + ('.png' if lossless else '.jpg'))
         temporary = destination.with_suffix('.tmp')
         try:
-            image.convert('RGB').save(temporary, format='JPEG', quality=95, subsampling=0)
+            image.convert('RGB').save(temporary, format='PNG' if lossless else 'JPEG', quality=95, subsampling=0)
             temporary.replace(destination)
         finally:
             temporary.unlink(missing_ok=True)
@@ -169,10 +203,17 @@ class Session:
                       width=image.width, height=image.height, audio_seconds=seconds,
                       decoded_at=datetime.now(timezone.utc).isoformat(), source=self.status['source'])
         record.update(self.image_metadata(image))
+        print(f"[INFO] {self.image_prefix} saved {destination} at audio {seconds}s",flush=True)
+        # The image remains saved even if optional confidence/metadata fails.
+        if lossless and 'sstv_confidence' in image.info:
+            try:
+                from .storage import save_confidence
+                record['confidence_file'] = save_confidence(destination, image, image.info['sstv_confidence'])
+            except (OSError, ValueError) as exc:
+                self.update(warning=f'Image saved, but confidence could not be saved: {exc}')
         with self.lock:
             self.recent.append(record)
             self.status['images'] += 1
-        # JPEG is already committed, even if saving its optional metadata fails.
         try:
             destination.with_suffix('.json').write_text(json.dumps(record, indent=2), encoding='utf-8')
         except OSError as exc:
@@ -181,6 +222,9 @@ class Session:
     def _run(self, options, file, cleanup):
         capture = None
         decoder = None
+        self.log_reception('reception started', input_file=str(file) if file else None,
+                           input_device=options.get('device'), channel=options.get('channel', 0),
+                           output=str(self.output))
         try:
             self.output.mkdir(parents=True, exist_ok=True)
 
@@ -222,7 +266,8 @@ class Session:
                         with audio_com():
                             device = options.get('device')
                             source = input_device(sc, device)
-                            self.update(device=source.name if source is not None else device)
+                            self.update(device=source.name if source is not None else device,
+                                        device_id=getattr(source, 'id', device))
                             if source is None:
                                 raise ValueError('No audio input device is available')
                             # Capture all channels to avoid WASAPI mono capture corruption.
@@ -258,11 +303,22 @@ class Session:
             self.update(state='error', error=str(exc) or type(exc).__name__)
         finally:
             self.stop_event.set()
+            if decoder is not None and callable(getattr(decoder, 'close', None)):
+                try:
+                    decoder.close()
+                except Exception as exc:
+                    self.update(state='error', error=f'Decoder cleanup failed: {exc}')
             if capture:
                 capture.join(timeout=5)
                 if capture.is_alive():
                     self.update(state='error', error='Audio driver did not stop; restart the plugin before capturing again')
+                    self.log_reception('shutdown delayed', error=self.status['error'])
                     capture.join()
-            if cleanup and file:
-                Path(file).unlink(missing_ok=True)
+            try:
+                if cleanup and file:
+                    Path(file).unlink(missing_ok=True)
+            except OSError as exc:
+                self.update(warning=f'Could not remove uploaded audio: {exc}')
+            finally:
+                self.log_summary()
 

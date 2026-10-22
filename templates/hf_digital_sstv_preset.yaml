@@ -1,0 +1,13 @@
+# Copy into presets/, then choose it in BQE or set it as the idle preset.
+# Adjust frequency and sideband for the station you intend to receive.
+nickname: "hf_digital_sstv"
+channel_name: "HF digital SSTV on 7.058"
+type: "HF"
+frequency_hz: "7058000"
+mode: "LSB"
+bandwidth: "3000"
+agc: medium
+squelch_level: 0
+decode_hf_images: true  # Uses radio_soundcard from bqe_config/my_rig.yaml.
+hf_image_profile: auto  # auto, freedv, or hamdrm
+program_to_run_while_waiting: ''

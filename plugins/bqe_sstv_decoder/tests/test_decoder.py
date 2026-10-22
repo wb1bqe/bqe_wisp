@@ -122,6 +122,93 @@ class DecoderTests(unittest.TestCase):
                 self.assertEqual(str(decoded[0].info['sstv_mode']), str(mode))
                 self.assert_colors(decoded[0])
 
+    def test_out_of_band_interference_all_modes(self):
+        # A strong out-of-band tone makes the unfiltered crossing estimator
+        # follow the interferer instead of the SSTV tones. Cover every mode,
+        # including the longest transmissions, with the production filter.
+        rate = 12000
+        for name in dir(sstv.Mode):
+            if not name.isupper():
+                continue
+            with self.subTest(mode=name):
+                mode = getattr(sstv.Mode, name)
+                image = picture(mode.image_width, mode.image_height)
+                audio = sstv.encode(image, mode, rate).astype(np.float32)/32768
+                audio = .2 * audio + .4 * np.sin(2*np.pi*4500*np.arange(len(audio))/rate)
+                self.assertEqual(sstv.decode(audio[:3*rate], rate), [])
+                decoded = receive(audio, rate=rate, block=3077)
+                self.assertEqual(len(decoded), 1)
+                self.assertTrue(decoded[0].info['sstv_complete'])
+                self.assertEqual(str(decoded[0].info['sstv_mode']), str(mode))
+                self.assert_colors(decoded[0])
+
+    def test_filter_supported_sample_rates_and_chunk_continuity(self):
+        for rate in (8000, 44100, 48000, 192000):
+            with self.subTest(rate=rate):
+                audio = sstv.encode(self.original, sstv.Mode.ROBOT_36, rate)[:3*rate].astype(np.float32)/32768
+                frequency = min(6000, rate * .45)
+                audio = .2 * audio + .3 * np.sin(2*np.pi*frequency*np.arange(len(audio))/rate)
+                contiguous = receive(audio, rate=rate, block=len(audio))
+                fragmented = receive(audio, rate=rate, block=137)
+                self.assertEqual(len(contiguous), 1)
+                self.assertEqual(len(fragmented), 1)
+                np.testing.assert_array_equal(np.asarray(contiguous[0]), np.asarray(fragmented[0]))
+
+    def test_empty_audio_does_not_disturb_filter(self):
+        decoder = AudioDecoder(48000, lambda *args: None)
+        decoder.push(np.empty(0))
+        decoder.finish()
+        self.assertEqual(decoder.seconds, 0)
+
+    def test_reception_logging_headers_summary_and_reset(self):
+        with tempfile.TemporaryDirectory() as folder, patch('builtins.print') as output:
+            root = Path(folder)
+            path = root / 'logging.wav'
+            sf.write(path, self.robot, 12000)
+            session = Session(root / 'images')
+            session.start({'source_name': 'LUCA-1'}, path)
+            session.thread.join(30)
+            self.assertFalse(session.thread.is_alive())
+            lines = [call.args[0] for call in output.call_args_list]
+            headers = [line for line in lines if line.startswith('[INFO] sstv header detected:')]
+            summaries = [line for line in lines if line.startswith('[INFO] sstv reception summary:')]
+            self.assertEqual(len(headers), 1)
+            self.assertEqual(len(summaries), 1)
+            header = json.loads(headers[0].split(': ', 1)[1])
+            self.assertEqual(header['mode'], 'ROBOT_36')
+            self.assertGreater(header['audio_seconds'], 0)
+            summary = json.loads(summaries[0].split(': ', 1)[1])
+            self.assertEqual(summary['source'], 'LUCA-1')
+            self.assertEqual(summary['headers_detected'], 1)
+            self.assertEqual(summary['images'], 1)
+            self.assertEqual(summary['state'], 'completed')
+            self.assertGreater(summary['audio_seconds'], 35)
+            self.assertNotIn('signal', summary)
+            self.assertTrue(all(call.kwargs.get('flush') for call in output.call_args_list))
+            # Reuse the same receiver: empty reception must not inherit counters.
+            output.reset_mock()
+            sf.write(path, np.zeros(12000), 12000)
+            session.start({}, path)
+            session.thread.join(5)
+            summaries = [call.args[0] for call in output.call_args_list
+                         if call.args[0].startswith('[INFO] sstv reception summary:')]
+            self.assertEqual(len(summaries), 1)
+            summary = json.loads(summaries[0].split(': ', 1)[1])
+            self.assertEqual(summary['headers_detected'], 0)
+            self.assertEqual(summary['images'], 0)
+            self.assertIn('No supported SSTV', summary['reception'])
+            # Startup errors still produce a final summary.
+            output.reset_mock()
+            path.write_bytes(b'not audio')
+            session.start({}, path)
+            session.thread.join(5)
+            summaries = [call.args[0] for call in output.call_args_list
+                         if call.args[0].startswith('[INFO] sstv reception summary:')]
+            self.assertEqual(len(summaries), 1)
+            summary = json.loads(summaries[0].split(': ', 1)[1])
+            self.assertEqual(summary['state'], 'error')
+            self.assertTrue(summary['error'])
+
     def test_file_sessions_wav_mp3_stereo_and_saved_metadata(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

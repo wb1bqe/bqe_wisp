@@ -2,6 +2,13 @@
 from http.server import ThreadingHTTPServer
 import os
 import socket
+from pathlib import Path
+
+
+def decoder_page(path):
+    """Include the shared connection lifecycle before the page's own scripts."""
+    script = Path(__file__).with_name('decoder_lifecycle.js').read_bytes()
+    return path.read_bytes().replace(b'<script>', b'<script>' + script + b'</script><script>', 1)
 
 
 class DecoderServer(ThreadingHTTPServer):

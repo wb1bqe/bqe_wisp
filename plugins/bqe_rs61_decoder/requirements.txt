@@ -1,0 +1,3 @@
+-r ../bqe_tlm_decoder/requirements.txt
+
+Pillow>=10,<13

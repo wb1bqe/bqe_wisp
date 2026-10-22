@@ -1,0 +1,26 @@
+# Neutral beta defaults. Configure your station before enabling passes.
+radio_is_sdr: false
+radio_type: '1'
+radio_port: ''
+radio_baud: '9600'
+radio_ft736r_intermediate_frequency_mhz: 50.1
+radio_soundcard: ''
+radio_idle_preset_nickname: ''
+sdr:
+  source: demo
+  device: '0'
+  sample_rate: 960000
+  gain: null
+  ppm: 0
+  audio_gain: 0.15
+  port: 8772
+  record_audio: false
+  record_iq: false
+  host: 127.0.0.1
+  tcp_port: 1234
+  library: ''
+lrpt:
+  satdump: ''
+  cli_version: '1'
+  symbol_rate: 72000
+  sample_rate: 240000

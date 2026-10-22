@@ -21,6 +21,9 @@ operation; an R820T receiver does not provide conventional HF coverage.
 - Direct USB via the `librtlsdr` C interface; device index or USB serial selection.
 - Network IQ from `rtl_tcp`, including tuner frequency, gain, sample-rate and PPM commands.
 - NFM (including `FM` alias), AM, USB, LSB and CW demodulation.
+- BPSK linear reception for AO-123: a 14000–20000 Hz RF channel shifted to a
+  12 kHz carrier in 48 kHz audio; use 16000 Hz bandwidth. This preserves phase
+  for the AO-123 plugin and lossless pass recordings.
 - Channel filtering and continuous digital tuning for Doppler correction.
 - Local control page: spectrum, waterfall, signal level, tuning, browser audio monitor.
 - 48 kHz mono PCM WAV recording, enabled by default.
@@ -28,6 +31,12 @@ operation; an R820T receiver does not provide conventional HF coverage.
 - Local audio fan-out to the existing SSTV, telemetry, SSDV and MP3 recorder plugins.
 - Managed pass/preset startup and orderly shutdown on parent-process EOF.
 - A clearly labelled generated test signal for checking the entire receiver without hardware.
+
+The receive monitor includes a downlink tuning knob: hover over it and scroll
+up to increase frequency by 100 Hz, or down to decrease it by 100 Hz per wheel
+event. Focus the knob and use arrow keys for the same steps. Tuning is available
+while running and must stay within the captured IQ band. During managed passes,
+automatic Doppler tuning can replace a manual frequency change.
 
 The web interface binds to **127.0.0.1:8772**. Closing the page does not stop the
 receiver. Stop with **Stop & save**, Ctrl+C, or the owning BQE pass/preset lifecycle.
@@ -208,6 +217,14 @@ not an IQ storage format.
 
 ## Limits and verification
 
+The console's live tuner-gain and audio-gain sliders initialize from the active
+receiver settings loaded from `my_rig.yaml`, including any satellite overrides.
+USB tuner gain follows the steps reported by the dongle; Auto selects automatic
+tuner gain. Moving either slider applies the change immediately without restarting
+capture. Audio gain affects decoder audio and recordings as well as listening.
+These adjustments last only for the receiver session and do not rewrite YAML.
+The next receiver session starts with the configured values again.
+
 This version supports one receiver and one demodulated channel per instance.
 Supported IQ rates are 240 kS/s, 960 kS/s, 1.2, 1.44, 1.92 and 2.4 MS/s.
 Channel bandwidth is 500–40000 Hz (SSB at most 12000 Hz). Use NFM for narrowband
@@ -241,3 +258,9 @@ Linux remain unverified.
 API references: [librtlsdr](https://github.com/osmocom/rtl-sdr/blob/master/include/rtl-sdr.h),
 [rtl_tcp](https://github.com/osmocom/rtl-sdr/blob/master/src/rtl_tcp.c),
 [SigMF](https://github.com/sigmf/SigMF).
+
+Managed passes validate receiver settings before launch. When a conventional-radio
+`bandwidth` is inherited for USB/LSB, values from 12–40 kHz are capped at the SDR
+SSB limit of 12 kHz with a warning. An explicit `sdr.bandwidth` is validated as
+entered. This allows shared satellite configurations without changing the radio
+filter setting. Pass logs identify the active receiver and radio-control status.

@@ -1,0 +1,51 @@
+# Requirements compatibility reviewed 2026-10-22; all 46 pins retained.
+# Windows CPython 3.13 x64 dependency lock, refreshed 2026-10-11.
+# Resolved from requirements.txt and plugins/bqe_sstv_decoder/requirements-test.txt.
+# Retains the original 2026-10-03 pins; adds Piper and speech dependencies.
+# Install into the private runtime before rebuilding; mkdist.py does not install packages.
+PyYAML==6.0.3
+SoundCard==0.4.6
+anyio==4.15.1
+aprslib==0.7.2
+av==16.1.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.2
+click==8.5.0
+colorama==0.4.6
+ctranslate2==4.8.2
+faster-whisper==1.2.1
+filelock==4.1.0
+flatbuffers==25.12.19
+fsspec==2026.9.0
+h11==0.16.0
+hf-xet==1.7.0
+httpcore2==2.13.1
+httpx2==2.13.1
+huggingface_hub==2.2.0
+idna==3.20
+jplephem==2.24
+lameenc==1.8.4
+numpy==2.5.3
+onnxruntime==1.31.0
+packaging==26.3
+pathvalidate==3.3.1
+pillow==12.3.0
+piper-tts==1.8.0
+protobuf==7.36.2
+pySSTV==0.5.9
+pycparser==3.0
+reedsolo==1.7.0
+requests==2.34.2
+scipy==1.18.1
+sgp4==2.27
+skyfield==1.55
+sounddevice==0.5.6
+soundfile==0.14.0
+soxr==1.1.0
+sstv==0.1.0
+tokenizers==0.23.3
+tqdm==4.70.1
+truststore==0.10.4
+typing_extensions==4.16.0
+urllib3==2.8.0

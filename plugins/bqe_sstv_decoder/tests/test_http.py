@@ -40,7 +40,7 @@ class HttpTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_upload_decodes_and_serves_jpeg(self):
+    def test_upload_decodes_and_serves_png(self):
         self.assertEqual(self.request('GET', '/')[0], 200)
         wav = sstv.encode_to_wav(Image.new('RGB', (320,240), 'red'), sstv.Mode.ROBOT_36, 12000)
         code, body = self.request('POST', '/file', wav, {'Content-Type': 'application/octet-stream', 'X-Filename': 'test.wav'})
@@ -51,7 +51,7 @@ class HttpTests(unittest.TestCase):
         name = status['recent'][0]['filename']
         code, jpg = self.request('GET', '/image/'+name)
         self.assertEqual(code, 200)
-        self.assertTrue(jpg.startswith(b'\xff\xd8'))
+        self.assertTrue(jpg.startswith(b'\x89PNG\r\n\x1a\n'))
         code, preview = self.request('GET', '/preview.jpg?v=1')
         self.assertEqual(code, 200)
         self.assertTrue(preview.startswith(b'\xff\xd8'))

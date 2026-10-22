@@ -73,6 +73,20 @@ class USBSource:
         self.thread = None
         self.error = None
         self.blocks = queue.Queue(maxsize=32)
+        self.control_lock = threading.RLock()
+        self.gains = []
+
+    def set_gain(self, gain):
+        with self.control_lock:
+            if not self.handle:
+                raise RuntimeError('RTL-SDR is closed')
+            if gain is not None and not self.gains:
+                raise ValueError('This tuner did not report manual gain steps')
+            actual = min(self.gains, key=lambda value: abs(value-gain)) if gain is not None else None
+            self.check('set_tuner_gain_mode', int(actual is not None))
+            if actual is not None:
+                self.check('set_tuner_gain', round(actual*10))
+            return actual
 
     def check(self, name, *args):
         result = getattr(self.lib, 'rtlsdr_' + name)(self.handle, *args)
@@ -92,14 +106,14 @@ class USBSource:
                 self.check('set_freq_correction', self.s.ppm)
             self.check('set_center_freq', round(self.s.center))
             self.check('set_agc_mode', 0)
-            self.check('set_tuner_gain_mode', int(self.s.gain is not None))
-            if self.s.gain is not None:
-                count = self.lib.rtlsdr_get_tuner_gains(self.handle, None)
-                if count <= 0 or count > 256:
-                    raise RuntimeError('Driver did not report usable tuner gains')
-                gains = (C.c_int * count)()
+            count = self.lib.rtlsdr_get_tuner_gains(self.handle, None)
+            if count < 0 or count > 256:
+                raise RuntimeError('Driver did not report usable tuner gains')
+            gains = (C.c_int * count)()
+            if count:
                 self.lib.rtlsdr_get_tuner_gains(self.handle, gains)
-                self.check('set_tuner_gain', min(gains, key=lambda x: abs(x-self.s.gain*10)))
+            self.gains = sorted(set(value/10 for value in gains))
+            self.s.gain = self.set_gain(self.s.gain)
             self.check('reset_buffer')
             callback_type = C.CFUNCTYPE(None, C.POINTER(C.c_ubyte), C.c_uint32, C.c_void_p)
 
@@ -151,9 +165,10 @@ class USBSource:
                     break
             if self.thread.is_alive():
                 raise RuntimeError('USB driver did not stop; restart this plugin before opening another receiver')
-        if self.handle:
-            self.lib.rtlsdr_close(self.handle)
-            self.handle = C.c_void_p()
+        with self.control_lock:
+            if self.handle:
+                self.lib.rtlsdr_close(self.handle)
+                self.handle = C.c_void_p()
 
 
 def recv_exact(sock, size):
@@ -171,6 +186,16 @@ class TCPSource:
 
     def __init__(self, settings, stop):
         self.s, self.stop, self.socket = settings, stop, None
+        self.control_lock = threading.RLock()
+
+    def set_gain(self, gain):
+        with self.control_lock:
+            if self.socket is None:
+                raise RuntimeError('rtl_tcp is closed')
+            self.command(3, int(gain is not None))
+            if gain is not None:
+                self.command(4, round(gain*10))
+            return gain
 
     def command(self, code, value):
         self.socket.sendall(struct.pack('>BI', code, int(value) & 0xffffffff))
@@ -185,9 +210,7 @@ class TCPSource:
             self.command(5, self.s.ppm)
             self.command(1, round(self.s.center))
             self.command(8, 0)  # Disable RTL2832 digital AGC.
-            self.command(3, int(self.s.gain is not None))
-            if self.s.gain is not None:
-                self.command(4, round(self.s.gain * 10))
+            self.set_gain(self.s.gain)
             # Discard pre-command data still buffered by the server/TCP stack.
             recv_exact(self.socket, self.s.sample_rate * 2 // 4)
             return self
@@ -204,8 +227,10 @@ class TCPSource:
                     raise
 
     def __exit__(self, *args):
-        if self.socket:
-            self.socket.close()
+        with self.control_lock:
+            if self.socket:
+                self.socket.close()
+                self.socket = None
 
 
 class FileSource:

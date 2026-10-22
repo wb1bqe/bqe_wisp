@@ -23,6 +23,61 @@ RUN_LOCK = threading.Lock()
 TIMEOUT = 20
 # Exact methods keep future hardware/integration tests out of user diagnostics.
 SUITES = {
+    'ao123': ('AO-123 BPSK telemetry', 'bqe_ao123_decoder',
+              'plugins/bqe_ao123_decoder/tests/test_decoder.py',
+              ['numpy', 'scipy', 'reedsolo'], [
+        'DecoderTests.test_symbols_fec_and_polarity',
+        'DecoderTests.test_transport_gaps_channels_and_bounds',
+        'DecoderTests.test_corruption_and_noise_rejected']),
+    'speech': ('English speech transcription', 'bqe_speech_decoder',
+               'plugins/bqe_speech_decoder/tests/test_transcription.py', [], [
+        'TranscriptionTests.test_radio_terms_timestamps_and_original_text_are_preserved',
+        'TranscriptionTests.test_no_speech_does_not_invent_text',
+        'TranscriptionTests.test_model_failure_does_not_replace_saved_transcript']),
+    'so127': ('SO-127 telemetry', 'bqe_so127_decoder',
+              'plugins/bqe_so127_decoder/tests/test_decoder.py',
+              ['numpy', 'scipy', 'soundfile', 'reedsolo', 'yaml'], [
+        'DecoderTests.test_operator_references',
+        'DecoderTests.test_audio_rates_polarities_and_chunks',
+        'DecoderTests.test_corruption_resync_and_repeated_packets']),
+    'aprs': ('APRS packets', 'bqe_aprs_decoder',
+             'plugins/bqe_aprs_decoder/tests/test_decoder.py',
+             ['numpy', 'scipy', 'reedsolo', 'aprslib'], [
+        'DecoderTests.test_afsk_rates_noise_polarity_and_chunks',
+        'DecoderTests.test_corruption_noise_and_repeated_packets',
+        'DecoderTests.test_aprs_formats_and_raw_fallback']),
+    'rs61': ('RS-61 telemetry', 'bqe_rs61_decoder',
+             'plugins/bqe_rs61_decoder/tests/test_decoder.py',
+             ['numpy', 'scipy', 'soundfile', 'reedsolo', 'PIL'], [
+        'DecoderTests.test_reference_beacons',
+        'DecoderTests.test_identity_unknown_and_activity_bits',
+        'DecoderTests.test_audio_crc_polarity_and_chunks']),
+    'otp2': ('OTP-2 experimental telemetry', 'bqe_otp2_decoder',
+             'plugins/bqe_otp2_decoder/tests/test_decoder.py',
+             ['numpy', 'scipy', 'soundfile', 'reedsolo'], [
+        'DecoderTests.test_audio_encodings_and_polarities',
+        'DecoderTests.test_corruption_and_noise']),
+    'lasarsat': ('LASARsat telemetry', 'bqe_lasarsat_decoder',
+                 'plugins/bqe_lasarsat_decoder/tests/test_decoder.py',
+                 ['numpy', 'scipy', 'soundfile', 'reedsolo'], [
+        'DecoderTests.test_audio_crc_identity_and_chunk_boundaries',
+        'DecoderTests.test_housekeeping_layouts_and_invalid_records']),
+    'monitor': ('MONITOR-3 / MONITOR-4 telemetry', 'bqe_monitor_decoder',
+                'plugins/bqe_monitor_decoder/tests/test_decoder.py',
+                ['numpy', 'scipy', 'soundfile', 'reedsolo'], [
+        'MonitorTests.test_reference_audio_all_rates_and_polarities',
+        'MonitorTests.test_satellite_identity_and_raw_records']),
+    'hf_images': ('HF digital SSTV', 'bqe_hf_image_decoder',
+                  'plugins/bqe_hf_image_decoder/tests/test_decoder.py',
+                  ['numpy', 'scipy', 'PIL', 'reedsolo', 'soxr'], [
+        'DecoderTests.test_framer_recovers_one_lost_frame_and_rejects_two',
+        'DecoderTests.test_hamdrm_image_gzip_and_rs_levels']),
+    'marmotsat': ('MARMOTSat UHF', 'bqe_marmotsat_decoder',
+                  'plugins/bqe_marmotsat_decoder/tests/test_decoder.py',
+                  ['numpy', 'scipy', 'soundfile', 'reedsolo'], [
+        'DecoderTests.test_reference_frame_and_whitening',
+        'DecoderTests.test_polarity_corruption_and_resynchronization',
+        'DecoderTests.test_audio_rates_polarities_and_chunk_boundaries']),
     'recorder': ('Audio recorder', 'bqe_sound_recorder', 'tests/test_audio_recording.py', ['numpy','lameenc','?soundcard'], [
         'RecordingFileTests.test_direct_input_uses_shared_backend_and_encodes_signal',
         'RecordingFileTests.test_finalization_names_and_collision_handling']),
@@ -45,6 +100,13 @@ SUITES = {
         'DSPTests.test_arbitrary_block_boundaries_preserve_samples_and_phase',
         'DSPTests.test_frequency_translation_follows_doppler',
         'DSPTests.test_opposite_sideband_rejection']),
+    'ssdv_formats': ('SSDV UMKA-1 / Geoscan', 'bqe_ssdv_decoder',
+                     'plugins/bqe_ssdv_decoder/tests/test_umka_geoscan.py',
+                     ['numpy', 'scipy', 'PIL', 'reedsolo'], [
+        'ImageTests.test_public_umka_capture_and_metadata',
+        'ImageTests.test_umka_rejects_invalid_and_bounds_sessions',
+        'ImageTests.test_geoscan_corruption_gaps_and_repeated_v1_images',
+        'ImageTests.test_sdr_usb_iq_to_complete_images']),
     'lrpt': ('LRPT', 'bqe_lrpt_decoder', 'plugins/bqe_lrpt_decoder/tests/test_lrpt.py', ['numpy'], [
         'LRPTTests.test_settings_validate_and_keep_full_iq',
         'LRPTTests.test_command_72_80_and_cli_versions',

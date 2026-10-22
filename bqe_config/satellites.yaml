@@ -1,625 +1,697 @@
-
-
-# Every entry must have a unique nickname which is used to search for the 
-# data record.  (This allows for multiple entries for a satellite with different
-# downlink frequencies etc.)
-
 satellites:
-    # Optional per-entry decoders; true uses radio_soundcard from my_rig.yaml:
-    # decode_sstv_images: true
-    # decode_telemetry: true
-
-    #https://www.amsat.se/2024/11/29/asrtu-1-designated-asrtu-oscar-123/  sstv
-  - nickname: "ao-123"
-    satellite_type: "FM Voice"
-    satellite_name: "AO-123"
-    catalog_number: '61781'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '435.400'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: False
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/ao-123
-
-  - nickname: "io-86"  # Only visible in low latitudes.  
-    satellite_type: "FM Voice"
-    satellite_name: "IO-86"
-    catalog_number: '40931'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '435.880'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.880'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '88.0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/io-86
-
-  - nickname: "wizard-meteo"
-    satellite_type: "SSTV"
-    satellite_name: "WIZARD-METEO (RS38S)"
-    catalog_number: '57189'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.825'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "rs61"
-    satellite_type: "SSDV"
-    satellite_name: "239ALFEROV (RS61S)"
-    catalog_number: '64881'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.270'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_ssdv_images: true  # RS61 Geoscan 9600-baud images; uses radio_soundcard.
-
-    program_to_run_during_pass: ''
-
-  - nickname: "rs-18s"
-    satellite_type: "SSTV"
-    satellite_name: "SAKHACUBE-CHOLBO (RS18S)"
-    catalog_number: '67290'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.350'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "MONITOR3"
-    satellite_type: "SSTV"
-    satellite_name: "Monitor-3 (RS58S)"  # Note: Unable to find tle keps on amsat site.
-    catalog_number: '57180'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '435.290'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "MONITOR4"
-    satellite_type: "SSTV"
-    satellite_name: "Monitor-4 (RS57S)"  # Note: Unable to find tle keps on amsat site.
-    catalog_number: '57182'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.080'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'  # Placeholder - Receive only.
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "iss-sstv"
-    satellite_type: "FM Voice"
-    satellite_name: "ISS"
-    catalog_number: '25544'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.550'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.990'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: True   # 2m antennas are not currently mounted
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "iss-rpt"
-    satellite_type: "FM Voice"
-    satellite_name: "ISS"
-    catalog_number: '25544'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.800'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.990'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: True   # 2m antennas are not currently mounted
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/iss
-    
-  - nickname: "iss-aprs"  # Do not use with FT-736r due to same band uplink/downlink
-    satellite_type: "APRS"
-    satellite_name: "ISS"
-    catalog_number: '25544'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.825'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '437.825'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: False   # 2m antennas are not currently mounted
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-
-  - nickname: "iss-school"  # Do not use with FT-736r due to same band uplink/downlink
-    satellite_type: "FM Voice"
-    satellite_name: "ISS"
-    catalog_number: '25544'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '145.800'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '437.825'  # Placeholder - school contacts are listen only. 
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: False   # 2m antennas are not currently mounted
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-    
-  - nickname: "sonate-2"
-    satellite_type: "satellite"
-    satellite_name: "SONATE-2"
-    catalog_number: '59112'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '145.825'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '435.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: False   # 2m antennas are not currently mounted
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-
-  - nickname: "umka-1"
-    satellite_name: "UmKA 1 (RS40S)"
-    satellite_type: "SSTV"
-    catalog_number: '57172'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.625'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "utmn-2"
-    satellite_name: "UTMN 2 (RS27S)"
-    satellite_type: "SSTV"
-    catalog_number: '57203'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.125'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass: ''
-
-  - nickname: "so-50"
-    satellite_type: "FM Voice"
-    satellite_name: "SO-50"
-    catalog_number: '27607'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.795'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/so-50
-
-  - nickname: "ao-91"
-    satellite_type: "FM Voice"
-    satellite_name: "AO-91"
-    catalog_number: '43017'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '145.960'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '436.250'
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '67.0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/ao-91
-
-  - nickname: "ao-07-beacon"
-    satellite_type: "Linear"
-    satellite_name: "ao-07"
-    catalog_number: '07530'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '145.700'
-    downlink_mode: 'USB'
-    uplink_frequency_mhz: '435.850'
-    uplink_mode: 'LSB'
-    bandwidth: '3000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: False
-    enable_tuning: True
-    priority: '4'
-    auto_schedule: False
-
-  - nickname: "rs-44-beacon"
-    satellite_type: "BEACON"
-    satellite_name: "RS-44"
-    catalog_number: '44909'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '435.605'
-    downlink_mode: 'USB'
-    uplink_frequency_mhz: '145.935'  # Not used - beacon is downlink only.
-    uplink_mode: 'CW'
-    bandwidth: '3000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '4'
-    auto_schedule: False
-
-  - nickname: "rs-44-transponder"
-    satellite_type: "LINEAR"
-    transponder_type: "INVERTING"
-    satellite_name: "RS-44"
-    catalog_number: '44909'
-    satellite_mode_required: True
-    downlink_frequency_range_mhz: '435.620-435.660'
-    downlink_frequency_mhz: '435.640' # Midpoint
-    downlink_mode: 'USB'
-    uplink_frequency_range_mhz: '145.940-145.980'  # MARKER - Correct this later
-    uplink_frequency_mhz: '145.960'   # Midpoint   MARKER - Correct this later
-    uplink_mode: 'LSB'
-    bandwidth: '3000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-
-  - nickname: "kwt-2"     # Active Aug1 - Aug2 2026
-    satellite_type: "SSTV"
-    satellite_name: "RS95S (QMR-KWT-2)"
-    catalog_number: '67291'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.950'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.800' # Not used - satellite is downlink only.
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass:  ''
-
-  - nickname: "OTP-2"  # Downlink not available on FT-991a
-    satellite_type: "BEACON"
-    satellite_name: ""
-    catalog_number: '63235'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '400.502'
-    downlink_mode: 'FM'
-    uplink_frequency_mhz: '145.850'
-    uplink_mode: 'FM'
-    bandwidth: '16000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/otp-2
-
-
-  - nickname: "LASARSAT-beacon"
-    satellite_type: "BEACON"
-    satellite_name: "LAZARSAT"
-    catalog_number: '62391'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.925'
-    downlink_mode: 'CW'
-    uplink_frequency_mhz: '145.850' # Not used
-    uplink_mode: 'FM'
-    bandwidth: '25000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    #decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/lasarsat
-
-  - nickname: "MARMOTSAT-BEACON"  # Downlink not available on FT-991a
-    satellite_type: "BEACON"
-    satellite_name: "CO-128"
-    catalog_number: '69912'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '145.875'
-    downlink_mode: 'CW'
-    uplink_frequency_mhz: '145.850' # Not used
-    uplink_mode: 'CW'
-    bandwidth: '16000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/marmotsat
-
-  - nickname: "MARINA-BEACON"
-    satellite_type: "BEACON"
-    satellite_name: "MARINA"
-    catalog_number: '69920'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.680'
-    downlink_mode: 'CW'
-    uplink_frequency_mhz: '145.850' # Not used
-    uplink_mode: 'CW'
-    bandwidth: '16000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    decode_sstv_images: true
-    decode_telemetry: true
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/marina
-
-  - nickname: "TISAT1-BEACON"
-    satellite_type: "BEACON"
-    satellite_name: "TISAT 1"
-    catalog_number: '36799'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '437.305'
-    downlink_mode: 'CW'
-    uplink_frequency_mhz: '145.850' # Not used
-    uplink_mode: 'CW'
-    bandwidth: '16000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/tisat1
-
-  - nickname: "CUTE-1-BEACON"
-    satellite_type: "BEACON"
-    satellite_name: "CUTE-1 (CO-55)"
-    catalog_number: '27844'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '436.8375'  # Also 436.836
-    downlink_mode: 'CW'
-    uplink_frequency_mhz: '145.850' # Not used
-    uplink_mode: 'CW'
-    bandwidth: '16000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/cute-1
-
-  - nickname: "fo-29-transponder"
-    satellite_type: "LINEAR"
-    transponder_type: "INVERTING"
-    satellite_name: "FO-29"
-    catalog_number: '24278'
-    satellite_mode_required: True
-    downlink_frequency_range_mhz: '435.800-435.900'
-    downlink_frequency_mhz: '435.860' # Midpoint
-    downlink_mode: 'USB'
-    uplink_frequency_range_mhz: '145.900-146.000'
-    uplink_frequency_mhz: '145.960'   # Midpoint
-    uplink_mode: 'LSB'
-    bandwidth: '3000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: False
-
-  - nickname: "fo-29-beacon"
-    satellite_type: "beacon"
-    satellite_name: "FO-29"
-    catalog_number: '24278'
-    satellite_mode_required: True
-    downlink_frequency_mhz: '435.795' #
-    downlink_mode: 'USB'
-    uplink_frequency_mhz: '145.960'   # Not used
-    uplink_mode: 'LSB'
-    bandwidth: '16000'
-    ctcss_tone: '0'
-    enable_antenna_tracking: True
-    enable_tuning: True
-    priority: '3'
-    auto_schedule: True
-    program_to_run_during_pass:
-      - python.exe
-      - plugins/bqe_sound_recorder/bqe_sound_recorder.py
-      - --input-device
-      - USB Audio CODEC
-      - --output
-      - plugins/bqe_sound_recorder/recordings/fo-29
-
-  - nickname: t-micro
-    satellite_name: T.MICRO
-    satellite_type: Telemetry
-    catalog_number: '66766'
-    downlink_frequency_mhz: '401.025'
-    downlink_mode: FM
-    uplink_frequency_mhz: '0'
-    uplink_mode: FM
-    bandwidth: '25000'
-    satellite_mode_required: false
-    enable_antenna_tracking: true
-    enable_tuning: true
-    auto_schedule: true
-    priority: '3'
-    receive_sdr: true
-    sdr_only: true
-    decode_telemetry: true
-    # Record lossless pass audio directly from the same SDR feeding telemetry.
-    sdr:
-      record_audio: true
-      output: plugins/bqe_sdr/recordings/t-micro
-    program_to_run_during_pass: ''
-
-  # Meteor digital weather images: receive full IQ and decode after the pass.
-  - nickname: meteor-m2-4-lrpt
-    satellite_name: METEOR-M2 4
-    satellite_type: Weather LRPT
-    catalog_number: '59051'
-    downlink_frequency_mhz: '137.100'
-    downlink_mode: FM # Display placeholder; LRPT bypasses audio demodulation entirely.
-    uplink_frequency_mhz: '0'
-    uplink_mode: FM
-    satellite_mode_required: false
-    enable_antenna_tracking: true
-    enable_tuning: false # Fixed wideband IQ capture; SatDump performs carrier recovery.
-    auto_schedule: true
-    priority: '3'
-    decode_lrpt_images: true
-    lrpt:
-      satellite: M2-4
-      symbol_rate: 72000
+- nickname: luca-1
+  satellite_name: LUCA-1 (RS90S)
+  satellite_type: Telemetry / SSTV
+  catalog_number: '67287'
+  satellite_mode_required: false
+  # Primary downlink; 436.150 MHz is the coordinated spare, not an uplink.
+  downlink_frequency_mhz: '437.180'
+  downlink_mode: FM
+  uplink_frequency_mhz: '0'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  squelch_level: 0
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  # Shared USP decoder covers 2400/4800/9600 baud; SSTV runs alongside it.
+  decode_telemetry: true
+  decode_sstv_images: true
+  record_audio: true
+  sdr:
+    audio_gain: 0.15
+  program_to_run_during_pass: ''
+- nickname: ao-123-tlm
+  satellite_type: Telemetry
+  satellite_name: AO-123
+  catalog_number: '61781'
+  satellite_mode_required: false
+  downlink_frequency_mhz: '435.400'
+  downlink_mode: BPSK
+  uplink_frequency_mhz: 145.845
+  uplink_mode: FM
+  bandwidth: '16000'
+  receive_sdr: true
+  sdr_only: true
+  sdr:
+    bandwidth: 16000
+  decode_ao123_telemetry: true
+  enable_antenna_tracking: false
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  record_audio: true
+  decode_ssdv: true
+  program_to_run_during_pass: ''
+- nickname: ao-123
+  satellite_type: SSDV
+  satellite_name: AO-123
+  catalog_number: '61781'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '435.400'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  record_audio: true
+  decode_ssdv: true
+  decode_telemetry: true
+  program_to_run_during_pass: ''
+- nickname: io-86
+  satellite_type: FM Voice
+  satellite_name: IO-86
+  catalog_number: '40931'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '435.880'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.880'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '88.0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: wizard-meteo
+  sdr_required: true
+  satellite_type: SSTV
+  satellite_name: WIZARD-METEO (RS38S)
+  catalog_number: '57189'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.825'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: true
+  decode_telemetry: true
+  program_to_run_during_pass: ''
+- nickname: rs61
+  sdr_required: true
+  satellite_type: SSDV
+  satellite_name: 239ALFEROV (RS61S)
+  catalog_number: '64881'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.270'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_ssdv_images: true
+  decode_rs61_telemetry: true
+  record_audio: true
+  squelch_level: 0
+  sdr:
+    audio_gain: 0.15
+  program_to_run_during_pass: ''
+- nickname: rs-18s
+  sdr_required: true
+  satellite_type: SSTV
+  satellite_name: SAKHACUBE-CHOLBO (RS18S)
+  catalog_number: '67290'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.350'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: true
+  decode_telemetry: true
+  program_to_run_during_pass: ''
+- nickname: MONITOR3
+  sdr_required: true
+  satellite_type: SSTV
+  satellite_name: Monitor-3 (RS58S)
+  catalog_number: '57180'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '435.290'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: false
+  decode_telemetry: false
+  decode_monitor_telemetry: true
+  program_to_run_during_pass: ''
+- nickname: MONITOR4
+  sdr_required: true
+  satellite_type: SSTV
+  satellite_name: Monitor-4 (RS57S)
+  catalog_number: '57182'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.080'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: false
+  decode_telemetry: false
+  decode_monitor_telemetry: true
+  program_to_run_during_pass: ''
+- nickname: iss-sstv
+  sdr_required: false
+  satellite_type: SSTV
+  satellite_name: ISS
+  catalog_number: '25544'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.550'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.990'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  decode_sstv_images: true
+  decode_telemetry: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: iss-rpt
+  satellite_type: FM Voice
+  satellite_name: ISS
+  catalog_number: '25544'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.800'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.990'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: iss-aprs
+  decode_aprs: true
+  aprs_bauds:
+  - 1200
+  satellite_type: APRS
+  satellite_name: ISS
+  catalog_number: '25544'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.825'
+  downlink_mode: FM
+  uplink_frequency_mhz: '437.825'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: false
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  record_audio: true
+- nickname: iss-school
+  satellite_type: FM Voice
+  satellite_name: ISS
+  catalog_number: '25544'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '145.800'
+  downlink_mode: FM
+  uplink_frequency_mhz: '437.825'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: false
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+- nickname: sonate-2
+  satellite_type: satellite
+  satellite_name: SONATE-2
+  catalog_number: '59112'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '145.825'
+  downlink_mode: FM
+  uplink_frequency_mhz: '435.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  decode_aprs: true
+  aprs_bauds:
+  - 1200
+  auto_schedule: true
+- nickname: umka-1
+  sdr_required: true
+  satellite_name: UmKA 1 (RS40S)
+  satellite_type: SSTV
+  catalog_number: '57172'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.625'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: true
+  decode_ssdv_images: true
+  ssdv_profile: umka-1
+  decode_telemetry: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: utmn-2
+  sdr_required: true
+  satellite_name: UTMN 2 (RS27S)
+  satellite_type: SSTV
+  catalog_number: '57203'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.125'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  squelch_level: 0
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: true
+  decode_telemetry: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: so-50
+  satellite_type: FM Voice
+  satellite_name: SO-50
+  catalog_number: '27607'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.795'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: ao-91
+  satellite_type: FM Voice
+  satellite_name: AO-91
+  catalog_number: '43017'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '145.960'
+  downlink_mode: FM
+  uplink_frequency_mhz: '436.250'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '67.0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: ao-07-beacon
+  satellite_type: Linear
+  satellite_name: ao-07
+  catalog_number: '07530'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '145.700'
+  downlink_mode: USB
+  uplink_frequency_mhz: '435.850'
+  uplink_mode: LSB
+  bandwidth: '3000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: false
+  enable_tuning: true
+  priority: '4'
+  sdr:
+    audio_gain: 2.5
+  auto_schedule: true
+- nickname: rs-44-beacon
+  satellite_type: BEACON
+  satellite_name: RS-44
+  catalog_number: '44909'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '435.605'
+  downlink_mode: USB
+  uplink_frequency_mhz: '145.935'
+  uplink_mode: CW
+  bandwidth: '3000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  record_audio: true
+  priority: '4'
+  sdr:
+    audio_gain: 0.15
+  auto_schedule: true
+- nickname: rs-44-transponder
+  satellite_type: LINEAR
+  transponder_type: INVERTING
+  satellite_name: RS-44
+  catalog_number: '44909'
+  satellite_mode_required: true
+  downlink_frequency_range_mhz: 435.620-435.660
+  downlink_frequency_mhz: '435.640'
+  downlink_mode: USB
+  uplink_frequency_range_mhz: 145.940-145.980
+  uplink_frequency_mhz: '145.960'
+  uplink_mode: LSB
+  bandwidth: '3000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+- nickname: kwt-2
+  sdr_required: true
+  satellite_type: SSTV
+  satellite_name: RS95S (QMR-KWT-2)
+  catalog_number: '67291'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.950'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.800'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  squelch_level: 0
+  sdr:
+    audio_gain: 0.15
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: true
+  decode_telemetry: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: OTP-2
+  sdr_required: true
+  satellite_type: BEACON
+  satellite_name: ''
+  catalog_number: '63235'
+  satellite_mode_required: false
+  downlink_frequency_mhz: '400.502'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  record_audio: true
+  decode_otp2_telemetry: true
+  squelch_level: 0
+  sdr:
+    audio_gain: 0.15
+  program_to_run_during_pass: ''
+- nickname: LASARSAT-beacon
+  sdr_required: true
+  satellite_type: BEACON
+  satellite_name: LAZARSAT
+  catalog_number: '62391'
+  satellite_mode_required: false
+  downlink_frequency_mhz: '436.925'
+  downlink_mode: CW
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  decode_sstv_images: false
+  decode_telemetry: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: lasarsat-tlm
+  sdr_required: true
+  satellite_type: Telemetry
+  satellite_name: LASARSAT
+  catalog_number: '62391'
+  satellite_mode_required: false
+  downlink_frequency_mhz: '436.925'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: FM
+  bandwidth: '25000'
+  ctcss_tone: '0'
+  squelch_level: 0
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_lasarsat_telemetry: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: Marmotsat-beacon
+  satellite_type: BEACON
+  satellite_name: CO-128
+  catalog_number: '69912'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '145.875'
+  downlink_mode: CW
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: CW
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  decode_sstv_images: false
+  decode_telemetry: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: Marmotsat-tlm
+  sdr_required: true
+  satellite_type: Telemetry
+  satellite_name: CO-128
+  catalog_number: '69912'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.125'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: CW
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: false
+  decode_telemetry: true
+  record_audio: false
+  program_to_run_during_pass: ''
+- nickname: MARINA-BEACON
+  sdr_required: true
+  satellite_type: BEACON
+  satellite_name: MARINA
+  catalog_number: '69920'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.680'
+  downlink_mode: CW
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: CW
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  decode_sstv_images: true
+  decode_telemetry: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: marina-tlm
+  sdr_required: true
+  satellite_type: Telemetry
+  satellite_name: marina
+  catalog_number: '69920'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.680'
+  downlink_mode: FM
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: CW
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  decode_sstv_images: true
+  decode_telemetry: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: TISAT1-BEACON
+  satellite_type: BEACON
+  satellite_name: TISAT 1
+  catalog_number: '36799'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '437.305'
+  downlink_mode: CW
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: CW
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: CUTE-1-BEACON
+  satellite_type: BEACON
+  satellite_name: CUTE-1 (CO-55)
+  catalog_number: '27844'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '436.8375'
+  downlink_mode: CW
+  uplink_frequency_mhz: '145.850'
+  uplink_mode: CW
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: fo-29-transponder
+  satellite_type: LINEAR
+  transponder_type: INVERTING
+  satellite_name: FO-29
+  catalog_number: '24278'
+  satellite_mode_required: true
+  downlink_frequency_range_mhz: 435.800-435.900
+  downlink_frequency_mhz: '435.860'
+  downlink_mode: USB
+  uplink_frequency_range_mhz: 145.900-146.000
+  uplink_frequency_mhz: '145.960'
+  uplink_mode: LSB
+  bandwidth: '3000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: false
+- nickname: fo-29-beacon
+  satellite_type: beacon
+  satellite_name: FO-29
+  catalog_number: '24278'
+  satellite_mode_required: true
+  downlink_frequency_mhz: '435.795'
+  downlink_mode: USB
+  uplink_frequency_mhz: '145.960'
+  uplink_mode: LSB
+  bandwidth: '16000'
+  ctcss_tone: '0'
+  enable_antenna_tracking: true
+  enable_tuning: true
+  priority: '3'
+  auto_schedule: true
+  record_audio: true
+  sdr:
+    audio_gain: 2.5
+  program_to_run_during_pass: ''
+- nickname: t-micro-tlm
+  sdr_required: true
+  satellite_name: T.MICRO
+  satellite_type: Telemetry
+  catalog_number: '66766'
+  downlink_frequency_mhz: '401.025'
+  downlink_mode: FM
+  uplink_frequency_mhz: '0'
+  uplink_mode: FM
+  bandwidth: '25000'
+  satellite_mode_required: false
+  enable_antenna_tracking: true
+  enable_tuning: true
+  auto_schedule: true
+  priority: '3'
+  decode_telemetry: true
+  record_audio: true
+  program_to_run_during_pass: ''
+- nickname: so-127-ssdv
+  satellite_name: SO-127
+  satellite_type: SSDV / Telemetry
+  catalog_number: '68446'
+  downlink_frequency_mhz: '436.875'
+  downlink_mode: FM
+  uplink_frequency_mhz: '0'
+  uplink_mode: FM
+  bandwidth: '12000'
+  satellite_mode_required: false
+  enable_antenna_tracking: true
+  enable_tuning: true
+  auto_schedule: true
+  priority: '3'
+  decode_ssdv_images: true
+  decode_so127_telemetry: true
+  squelch_level: 0
+  ssdv_profile: hades-sa
+  record_audio: true
+  sdr:
+    deviation: 1600
+  program_to_run_during_pass: ''
+- nickname: meteor-m2-4-lrpt
+  sdr_required: true
+  satellite_name: METEOR-M2 4
+  satellite_type: Weather LRPT
+  catalog_number: '59051'
+  downlink_frequency_mhz: '137.900'
+  downlink_mode: FM
+  uplink_frequency_mhz: '0'
+  uplink_mode: FM
+  satellite_mode_required: false
+  enable_antenna_tracking: true
+  enable_tuning: false
+  auto_schedule: true
+  priority: '3'
+  decode_lrpt_images: true
+  lrpt:
+    satellite: M2-4
+    symbol_rate: 72000
+    gain: null

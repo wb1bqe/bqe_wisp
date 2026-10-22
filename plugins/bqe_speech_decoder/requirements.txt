@@ -1,0 +1,4 @@
+faster-whisper>=1.2.1,<2
+# faster-whisper 1.2 uses av.open(metadata_errors=...), removed in newer PyAV.
+av>=11,<17
+PyYAML>=6,<7

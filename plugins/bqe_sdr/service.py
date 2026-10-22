@@ -108,6 +108,25 @@ class Session:
             self.settings.validate_tune(frequency)
             self.state['frequency'] = frequency
 
+    def set_gains(self, values):
+        if not values or set(values)-{'gain', 'audio_gain'}:
+            raise ValueError('Specify gain and/or audio_gain only')
+        with self.lock:
+            if self.state['state'] != 'running' or self.stop_event.is_set():
+                raise ValueError('Receiver is not running')
+            settings = Settings.from_dict(dict(self.settings.as_dict(), **values))
+            if 'gain' in values:
+                if not hasattr(self.capture, 'set_gain'):
+                    raise ValueError('Tuner gain requires a USB or rtl_tcp receiver')
+                settings.gain = self.capture.set_gain(settings.gain)
+                self.settings.gain = settings.gain
+            if 'audio_gain' in values:
+                # Demodulator shares this object and uses the new multiplier
+                # on its next audio block without resetting filters or clocks.
+                self.settings.audio_gain = settings.audio_gain
+            self.state['settings'] = self.settings.as_dict()
+            return dict(gain=self.settings.gain, audio_gain=self.settings.audio_gain)
+
     def _run(self):
         s = self.settings
         stem = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
@@ -143,7 +162,9 @@ class Session:
                     meta_path.write_text(json.dumps(meta, indent=2), encoding='utf-8')
                     self.update(iq_file=str(path), iq_metadata=str(meta_path))
                 self.hub.active = True
-                self.update(state='running')
+                self.update(state='running', settings=s.as_dict(),
+                            tuner_gains=getattr(capture, 'gains', []),
+                            live_tuner_gain=hasattr(capture, 'set_gain'))
                 for raw in capture:
                     if self.stop_event.is_set():
                         break
